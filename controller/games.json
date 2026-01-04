@@ -1,0 +1,12 @@
+﻿[
+  {
+    "name": "Deep Rock Galactic",
+    "appid": 548430,
+    "processes": ["FSD.exe"]
+  },
+  {
+    "name": "Left 4 Dead 2",
+    "appid": 550,
+    "processes": ["left4dead2.exe"]
+  }
+]
