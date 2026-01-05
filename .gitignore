@@ -14,6 +14,7 @@ Thumbs.db
 # Editor
 .vscode/
 .vs/
+*.csproj.user
 
 # Build
 bin/
