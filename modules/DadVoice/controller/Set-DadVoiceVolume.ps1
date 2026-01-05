@@ -10,7 +10,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$configPath = Join-Path $scriptRoot "config.json"
+$repoRoot = Resolve-Path (Join-Path $scriptRoot "..\\..\\..")
+$configPath = Join-Path $repoRoot "shared\\config.json"
 
 if (-not (Test-Path -Path $configPath)) {
   Write-Error "Missing config: $configPath"
@@ -18,17 +19,25 @@ if (-not (Test-Path -Path $configPath)) {
 }
 
 $config = Get-Content -Path $configPath -Raw | ConvertFrom-Json
-$computers = @($config.computers | Where-Object { $_ -and $_ -ne "" })
-$tasks = $config.tasks
+$voice = $config.voice
+if (-not $voice) {
+  Write-Error "Missing voice section in shared config."
+  exit 1
+}
+$computers = @($config.pcs | Where-Object { $_ -and $_ -ne "" })
+if ($voice -and $voice.computers -and $voice.computers.Count -gt 0) {
+  $computers = @($voice.computers | Where-Object { $_ -and $_ -ne "" })
+}
+$tasks = $voice.tasks
 
 if (-not $computers -or $computers.Count -eq 0) {
-  Write-Error "No computers defined in config.json."
+  Write-Error "No PCs defined in shared config."
   exit 1
 }
 
 $taskName = $tasks.$Preset
 if (-not $taskName) {
-  Write-Error "Missing tasks.$Preset in config.json."
+  Write-Error "Missing voice.tasks.$Preset in shared config."
   exit 1
 }
 

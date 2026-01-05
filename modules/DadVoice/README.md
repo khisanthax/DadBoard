@@ -10,7 +10,7 @@ DadVoice is a Windows + Docker setup for one-click family voice chat using Mumbl
 ## Quick start
 1. Deploy the Mumble server using `server\README-server.md`.
 2. On each gaming PC, run `client\Setup-Client.ps1` as Administrator.
-3. On the main PC, edit `controller\config.json` with your PC names.
+3. On the main PC, edit `shared\config.json` with your PC names and voice task names.
 4. Run `controller\Start-DadVoice.ps1` for one-click launch.
 
 ## Daily use

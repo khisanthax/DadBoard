@@ -9,11 +9,12 @@ python .\DadBoardApp.py
 ```
 
 ## Config
-Edit `config.json`:
+Edit `shared/config.json`:
 - `pcs`: list of PC names on the LAN (must match Windows hostnames)
 - `shareName`: share name used by clients (`DadBoard$`)
 - `timeouts`: used for task creation on client (default values here are informational)
 - `staleMinutes`: mark status as stale if last update is older than this
+- `voice`: DadVoice task names and quiet-before-start flag
 
 Edit `games.json`:
 ```json

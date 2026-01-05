@@ -4,10 +4,10 @@
 Run these scripts on your main PC to trigger scheduled tasks on each gaming PC.
 
 ## Configuration
-Edit `controller\config.json`:
-- `computers`: list of PC names or IPs.
-- `tasks`: scheduled task names created by Setup-Client.
-- `applyQuietBeforeStart`: if true, set quiet volume before starting Mumble.
+Edit `shared\config.json`:
+- `pcs`: list of PC names or IPs.
+- `voice.tasks`: scheduled task names created by Setup-Client.
+- `voice.applyQuietBeforeStart`: if true, set quiet volume before starting Mumble.
 
 ## Usage
 Start DadVoice (quiet first by default):
@@ -41,7 +41,7 @@ $cred = Get-Credential
 - Local task run: `schtasks /Run /TN DadVoice_Start`
 
 ## Troubleshooting
-- Task not found: rerun `client\Setup-Client.ps1` and confirm task names match `config.json`.
+- Task not found: rerun `client\Setup-Client.ps1` and confirm task names match `shared\config.json`.
 - Access denied: verify admin rights, firewall rules, and remote UAC settings.
 - Mumble not installed: check `%ProgramData%\DadVoice\setup.log` on the target PC.
 - URL handler issues: run Mumble once on the target PC so the `mumble://` protocol registers.

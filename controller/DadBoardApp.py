@@ -7,6 +7,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.abspath(os.path.join(BASE_DIR, os.pardir))
+SHARED_DIR = os.path.join(REPO_ROOT, 'shared')
 
 
 def load_json(path):
@@ -257,7 +259,7 @@ class DadBoardApp(tk.Tk):
 
 
 def main():
-    config_path = os.path.join(BASE_DIR, 'config.json')
+    config_path = os.path.join(SHARED_DIR, 'config.json')
     games_path = os.path.join(BASE_DIR, 'games.json')
 
     try:

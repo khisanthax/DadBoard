@@ -1,0 +1,20 @@
+﻿{
+  "pcs": ["DAD-PC", "REMOTE-PC-1", "REMOTE-PC-2", "REMOTE-PC-3"],
+  "shareName": "DadBoard$",
+  "statusFile": "status.json",
+  "timeouts": {
+    "launchWaitSec": 120,
+    "inviteWaitSec": 10
+  },
+  "staleMinutes": 5,
+  "pollIntervalSec": 2,
+  "voice": {
+    "tasks": {
+      "start": "DadVoice_Start",
+      "quiet": "DadVoice_Volume_Quiet",
+      "normal": "DadVoice_Volume_Normal",
+      "mute": "DadVoice_Volume_Mute"
+    },
+    "applyQuietBeforeStart": true
+  }
+}
