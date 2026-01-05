@@ -31,3 +31,6 @@ This installs `DadBoard.exe` to `C:\Program Files\DadBoard\`, writes `agent.conf
 .\tools\diag_bundle.ps1
 ```
 Output is written to `C:\ProgramData\DadBoard\diag\dadboard_diag_YYYYMMDD_HHMMSS.txt`.
+
+## Troubleshooting
+- If DadBoard fails to start, run `Setup-DadBoard.ps1` as admin to register the WebSocket URL ACL and retry.

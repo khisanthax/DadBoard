@@ -119,6 +119,10 @@ if (-not $RunAsPassword) {
     $RunAsPassword = $cred.GetNetworkCredential().Password
 }
 
+$wsUrl = "http://+:$WsPort/ws/"
+& netsh http delete urlacl url=$wsUrl | Out-Null
+& netsh http add urlacl url=$wsUrl user=$RunAsUser | Out-Null
+
 $taskAction = Join-Path $InstallRoot "DadBoard.exe"
 $taskCommand = "`"$taskAction`""
 & schtasks.exe /Create /TN $TaskName /TR $taskCommand /SC ONLOGON /RL LIMITED /F /RU $RunAsUser /RP $RunAsPassword /IT | Out-Null

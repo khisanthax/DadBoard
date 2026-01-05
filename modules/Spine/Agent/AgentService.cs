@@ -51,24 +51,32 @@ public sealed class AgentService : IDisposable
 
     public void Start()
     {
-        _config = LoadConfig();
-        _state = new AgentState
+        try
         {
-            PcId = _config.PcId,
-            DisplayName = _config.DisplayName
-        };
+            _config = LoadConfig();
+            _state = new AgentState
+            {
+                PcId = _config.PcId,
+                DisplayName = _config.DisplayName
+            };
 
-        _udp = new UdpClient(AddressFamily.InterNetwork)
+            _udp = new UdpClient(AddressFamily.InterNetwork)
+            {
+                EnableBroadcast = true
+            };
+
+            StartWebSocketServer();
+
+            _helloTimer = new Timer(_ => SendHello(), null, 0, _config.HelloIntervalMs);
+            _stateTimer = new Timer(_ => PersistState(), null, 0, 1000);
+
+            _logger.Info("Agent started.");
+        }
+        catch (Exception ex)
         {
-            EnableBroadcast = true
-        };
-
-        StartWebSocketServer();
-
-        _helloTimer = new Timer(_ => SendHello(), null, 0, _config.HelloIntervalMs);
-        _stateTimer = new Timer(_ => PersistState(), null, 0, 1000);
-
-        _logger.Info("Agent started.");
+            _logger.Error($"Agent failed to start: {ex}");
+            throw;
+        }
     }
 
     public void Stop()
@@ -126,11 +134,19 @@ public sealed class AgentService : IDisposable
 
     private void StartWebSocketServer()
     {
-        _listener = new HttpListener();
-        _listener.Prefixes.Add($"http://+:{_config.WsPort}/ws/");
-        _listener.Start();
-        _ = Task.Run(AcceptLoop);
-        _logger.Info($"WebSocket server listening on port {_config.WsPort}.");
+        try
+        {
+            _listener = new HttpListener();
+            _listener.Prefixes.Add($"http://+:{_config.WsPort}/ws/");
+            _listener.Start();
+            _ = Task.Run(AcceptLoop);
+            _logger.Info($"WebSocket server listening on port {_config.WsPort}.");
+        }
+        catch (HttpListenerException ex)
+        {
+            _logger.Error($"WebSocket listener failed: {ex.Message}. Ensure URL ACL is configured for http://+:{_config.WsPort}/ws/.");
+            throw;
+        }
     }
 
     private async Task AcceptLoop()
