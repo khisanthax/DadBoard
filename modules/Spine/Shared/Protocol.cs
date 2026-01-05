@@ -71,6 +71,7 @@ public sealed class AgentConfig
     public int WsPort { get; set; } = ProtocolConstants.DefaultWsPort;
     public int HelloIntervalMs { get; set; } = 1000;
     public string Version { get; set; } = "1.0";
+    public bool StartLeaderOnLogin { get; set; } = false;
 }
 
 public sealed class LeaderConfig

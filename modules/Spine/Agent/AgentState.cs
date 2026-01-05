@@ -2,7 +2,7 @@
 
 namespace DadBoard.Agent;
 
-sealed class AgentState
+public sealed class AgentState
 {
     public string PcId { get; set; } = "";
     public string DisplayName { get; set; } = "";

@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace DadBoard.Agent;
 
-sealed class AgentStateWriter
+public sealed class AgentStateWriter
 {
     private readonly string _path;
     private readonly object _lock = new();

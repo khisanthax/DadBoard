@@ -13,7 +13,7 @@ using DadBoard.Spine.Shared;
 
 namespace DadBoard.Agent;
 
-sealed class AgentService : IDisposable
+public sealed class AgentService : IDisposable
 {
     private readonly string _baseDir;
     private readonly string _agentDir;

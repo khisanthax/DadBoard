@@ -2,7 +2,7 @@
 
 namespace DadBoard.Leader;
 
-sealed class AgentInfo
+public sealed class AgentInfo
 {
     public string PcId { get; set; } = "";
     public string Name { get; set; } = "";
@@ -20,7 +20,7 @@ sealed class AgentInfo
     public DateTime LastAckTs { get; set; }
 }
 
-sealed class ConnectionInfo
+public sealed class ConnectionInfo
 {
     public string PcId { get; set; } = "";
     public string Endpoint { get; set; } = "";
@@ -29,7 +29,7 @@ sealed class ConnectionInfo
     public string LastError { get; set; } = "";
 }
 
-sealed class LeaderStateSnapshot
+public sealed class LeaderStateSnapshot
 {
     public string LastUpdated { get; set; } = "";
     public AgentInfo[] Agents { get; set; } = Array.Empty<AgentInfo>();

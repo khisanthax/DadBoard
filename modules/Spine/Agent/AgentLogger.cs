@@ -3,7 +3,7 @@ using System.IO;
 
 namespace DadBoard.Agent;
 
-sealed class AgentLogger
+public sealed class AgentLogger
 {
     private readonly string _path;
     private readonly object _lock = new();

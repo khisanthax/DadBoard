@@ -7,7 +7,7 @@ using DadBoard.Spine.Shared;
 
 namespace DadBoard.Leader;
 
-sealed class LeaderForm : Form
+public sealed class LeaderForm : Form
 {
     private readonly LeaderService _service;
     private readonly ListBox _gameList = new();

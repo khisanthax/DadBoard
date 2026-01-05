@@ -15,7 +15,7 @@ using DadBoard.Spine.Shared;
 
 namespace DadBoard.Leader;
 
-sealed class LeaderService : IDisposable
+public sealed class LeaderService : IDisposable
 {
     private readonly string _baseDir;
     private readonly string _leaderDir;
@@ -86,6 +86,18 @@ sealed class LeaderService : IDisposable
             LastAckError = a.LastAckError,
             LastAckTs = a.LastAckTs
         }).OrderBy(a => a.Name, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    public IReadOnlyList<ConnectionInfo> GetConnectionsSnapshot()
+    {
+        return _connections.Values.Select(c => new ConnectionInfo
+        {
+            PcId = c.PcId,
+            Endpoint = c.Endpoint.ToString(),
+            State = c.State,
+            LastMessage = c.LastMessage == default ? "" : c.LastMessage.ToString("O"),
+            LastError = c.LastError ?? ""
+        }).OrderBy(c => c.PcId, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     public void LaunchOnAll(GameDefinition game)

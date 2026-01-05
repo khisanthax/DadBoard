@@ -6,36 +6,25 @@ This phase installs the standalone Agent and Leader apps. No voice features are 
 From repo root:
 
 ```powershell
-cd modules\Spine\Agent
-dotnet publish -c Release -r win-x64 /p:PublishSingleFile=true /p:SelfContained=true
-
-cd ..\Leader
+cd modules\Spine\App
 dotnet publish -c Release -r win-x64 /p:PublishSingleFile=true /p:SelfContained=true
 ```
 
-## Install Agent (each PC)
+## Install DadBoard (each PC)
 Copy the repo folder (or just the published output) to the target PC and run:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
-.\Setup-Agent.ps1
+.\Setup-DadBoard.ps1 -CreateLeaderShortcut
 ```
 
-This installs to `C:\ProgramData\DadBoard\Agent\`, writes `agent.config.json`, and creates the scheduled task `DadBoardAgent` at logon.
-
-## Install Leader (leader PC)
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\Setup-Leader.ps1 -CreateShortcut
-```
-
-This installs to `C:\ProgramData\DadBoard\Leader\` and copies `leader.config.json`.
+This installs `DadBoard.exe` to `C:\Program Files\DadBoard\`, writes `agent.config.json` and `leader.config.json` under `C:\ProgramData\DadBoard\`, and creates a scheduled task `DadBoard` at logon. The optional Start Menu shortcut `DadBoard Leader` launches the app with leader enabled.
 
 ## Verify running
 - Agent log: `C:\ProgramData\DadBoard\logs\agent.log`
-- Leader log: `C:\ProgramData\DadBoard\logs\leader.log`
+- Leader log (if enabled): `C:\ProgramData\DadBoard\logs\leader.log`
 - Agent state: `C:\ProgramData\DadBoard\Agent\agent_state.json`
-- Leader known agents: `C:\ProgramData\DadBoard\known_agents.json`
+- Leader known agents (if enabled): `C:\ProgramData\DadBoard\known_agents.json`
 
 ## Run diagnostics
 ```powershell

@@ -28,8 +28,13 @@ Write-Line ("Timestamp: {0}" -f (Get-Date -Format "O"))
 Write-Line ("Machine: {0}" -f $env:COMPUTERNAME)
 Write-Line ("User: {0}" -f $env:USERNAME)
 
+$appExe = Join-Path ${env:ProgramFiles} "DadBoard\\DadBoard.exe"
 $agentExe = Join-Path $agentDir "DadBoard.Agent.exe"
 $leaderExe = Join-Path $leaderDir "DadBoard.Leader.exe"
+if (Test-Path -Path $appExe) {
+    $ver = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($appExe).FileVersion
+    Write-Line "DadBoard Version: $ver"
+}
 if (Test-Path -Path $agentExe) {
     $ver = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($agentExe).FileVersion
     Write-Line "Agent Version: $ver"
