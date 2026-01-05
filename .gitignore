@@ -13,3 +13,9 @@ Thumbs.db
 
 # Editor
 .vscode/
+.vs/
+
+# Build
+bin/
+obj/
+node_modules/

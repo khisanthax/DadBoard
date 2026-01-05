@@ -1,0 +1,12 @@
+; DadVoice standardized Mumble client config (legacy mumble.conf)
+; Focus: external app ducking and stable audio defaults.
+
+audio/attenuateothers=1
+audio/attenuateothersontalk=1
+audio/onlyattenuatesameoutput=1
+audio/othervolume=0.35
+audio/volume=1.0
+audio/allowlowdelay=1
+net/reconnect=1
+net/qos=1
+net/udpforcetcpaddr=1

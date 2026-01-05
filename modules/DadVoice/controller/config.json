@@ -1,0 +1,15 @@
+{
+  "computers": [
+    "PC1",
+    "PC2",
+    "PC3",
+    "PC4"
+  ],
+  "tasks": {
+    "start": "DadVoice_Start",
+    "quiet": "DadVoice_Volume_Quiet",
+    "normal": "DadVoice_Volume_Normal",
+    "mute": "DadVoice_Volume_Mute"
+  },
+  "applyQuietBeforeStart": true
+}

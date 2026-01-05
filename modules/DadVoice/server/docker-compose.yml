@@ -1,0 +1,18 @@
+version: "3.8"
+
+services:
+  mumble:
+    image: mumblevoip/mumble-server:latest
+    container_name: dadvoice-mumble
+    restart: unless-stopped
+    ports:
+      - "64738:64738/tcp"
+      - "64738:64738/udp"
+    environment:
+      - MUMBLE_SERVER_PASSWORD=ChangeMe
+      - MUMBLE_WELCOMETEXT=Welcome to DadVoice
+    volumes:
+      - mumble-data:/data
+
+volumes:
+  mumble-data:
