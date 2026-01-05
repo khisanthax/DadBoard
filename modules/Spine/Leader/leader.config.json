@@ -1,0 +1,15 @@
+﻿{
+  "udpPort": 39555,
+  "wsPortDefault": 39601,
+  "onlineTimeoutSec": 5,
+  "commandTimeoutSec": 30,
+  "games": [
+    {
+      "id": "drg",
+      "name": "Deep Rock Galactic",
+      "launchUrl": "steam://run/548430",
+      "processNames": ["FSD.exe"],
+      "readyTimeoutSec": 120
+    }
+  ]
+}
