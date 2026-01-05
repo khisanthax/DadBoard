@@ -3,7 +3,7 @@
 )
 
 $baseDir = Join-Path $env:ProgramData "DadBoard"
-$logDir = Join-Path $baseDir "logs"
+$logDir = Join-Path ${env:ProgramFiles} "DadBoard\\logs"
 $agentDir = Join-Path $baseDir "Agent"
 $leaderDir = Join-Path $baseDir "Leader"
 

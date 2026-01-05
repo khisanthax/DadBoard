@@ -44,7 +44,7 @@ public sealed class LeaderService : IDisposable
     {
         _baseDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DadBoard");
         _leaderDir = Path.Combine(_baseDir, "Leader");
-        _logDir = Path.Combine(_baseDir, "logs");
+        _logDir = Path.Combine(AppContext.BaseDirectory, "logs");
         _configPath = Path.Combine(_leaderDir, "leader.config.json");
         _knownAgentsPath = Path.Combine(_baseDir, "known_agents.json");
         _statePath = Path.Combine(_leaderDir, "leader_state.json");

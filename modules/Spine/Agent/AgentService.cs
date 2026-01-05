@@ -38,7 +38,7 @@ public sealed class AgentService : IDisposable
     {
         _baseDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DadBoard");
         _agentDir = Path.Combine(_baseDir, "Agent");
-        _logDir = Path.Combine(_baseDir, "logs");
+        _logDir = Path.Combine(AppContext.BaseDirectory, "logs");
         _statePath = Path.Combine(_agentDir, "agent_state.json");
         _configPath = Path.Combine(_agentDir, "agent.config.json");
 
