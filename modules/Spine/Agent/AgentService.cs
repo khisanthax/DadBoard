@@ -10,6 +10,10 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using DadBoard.Spine.Shared;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Hosting;
 
 namespace DadBoard.Agent;
 
@@ -26,7 +30,8 @@ public sealed class AgentService : IDisposable
     private AgentConfig _config = new();
     private readonly CancellationTokenSource _cts = new();
     private UdpClient? _udp;
-    private HttpListener? _listener;
+    private WebApplication? _webApp;
+    private Task? _webAppTask;
 
     private readonly ConcurrentDictionary<WebSocket, DateTime> _clients = new();
     private Timer? _helloTimer;
@@ -38,7 +43,7 @@ public sealed class AgentService : IDisposable
     {
         _baseDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DadBoard");
         _agentDir = Path.Combine(_baseDir, "Agent");
-        _logDir = Path.Combine(AppContext.BaseDirectory, "logs");
+        _logDir = Path.Combine(_baseDir, "logs");
         _statePath = Path.Combine(_agentDir, "agent_state.json");
         _configPath = Path.Combine(_agentDir, "agent.config.json");
 
@@ -136,57 +141,34 @@ public sealed class AgentService : IDisposable
     {
         try
         {
-            _listener = new HttpListener();
-            _listener.Prefixes.Add($"http://+:{_config.WsPort}/ws/");
-            _listener.Start();
-            _ = Task.Run(AcceptLoop);
-            _logger.Info($"WebSocket server listening on port {_config.WsPort}.");
-        }
-        catch (HttpListenerException ex)
-        {
-            _logger.Error($"WebSocket listener failed: {ex.Message}. Ensure URL ACL is configured for http://+:{_config.WsPort}/ws/.");
-            throw;
-        }
-    }
+            var builder = WebApplication.CreateBuilder();
+            builder.WebHost.UseUrls($"http://0.0.0.0:{_config.WsPort}");
 
-    private async Task AcceptLoop()
-    {
-        if (_listener == null)
-        {
-            return;
-        }
+            var app = builder.Build();
+            app.UseWebSockets();
 
-        while (!_cts.IsCancellationRequested)
-        {
-            HttpListenerContext? context = null;
-            try
+            app.Map("/ws", async context =>
             {
-                context = await _listener.GetContextAsync().ConfigureAwait(false);
-                if (!context.Request.IsWebSocketRequest)
+                if (!context.WebSockets.IsWebSocketRequest)
                 {
                     context.Response.StatusCode = 400;
-                    context.Response.Close();
-                    continue;
+                    return;
                 }
 
-                var wsContext = await context.AcceptWebSocketAsync(null).ConfigureAwait(false);
-                var socket = wsContext.WebSocket;
+                var socket = await context.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
                 _clients[socket] = DateTime.UtcNow;
                 _logger.Info("Leader connected via WebSocket.");
-                _ = Task.Run(() => ReceiveLoop(socket));
-            }
-            catch (ObjectDisposedException)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                _logger.Warn($"WebSocket accept error: {ex.Message}");
-                if (context != null)
-                {
-                    try { context.Response.Abort(); } catch { }
-                }
-            }
+                await ReceiveLoop(socket).ConfigureAwait(false);
+            });
+
+            _webApp = app;
+            _webAppTask = app.RunAsync(_cts.Token);
+            _logger.Info($"Kestrel WebSocket server listening on port {_config.WsPort}.");
+        }
+        catch (Exception ex)
+        {
+            _logger.Error($"WebSocket listener failed: {ex.Message}");
+            throw;
         }
     }
 
@@ -439,7 +421,16 @@ public sealed class AgentService : IDisposable
         _cts.Cancel();
         _helloTimer?.Dispose();
         _stateTimer?.Dispose();
-        _listener?.Close();
+        if (_webApp != null)
+        {
+            try
+            {
+                _webApp.StopAsync().GetAwaiter().GetResult();
+            }
+            catch
+            {
+            }
+        }
         _udp?.Dispose();
     }
 }

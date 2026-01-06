@@ -76,7 +76,7 @@ Assert-Admin
 $baseDir = Join-Path $env:ProgramData "DadBoard"
 $agentDir = Join-Path $baseDir "Agent"
 $leaderDir = Join-Path $baseDir "Leader"
-$logDir = Join-Path $InstallRoot "logs"
+$logDir = Join-Path $baseDir "logs"
 $diagDir = Join-Path $baseDir "diag"
 New-Item -ItemType Directory -Path $agentDir -Force | Out-Null
 New-Item -ItemType Directory -Path $leaderDir -Force | Out-Null
@@ -120,10 +120,6 @@ if (-not $RunAsPassword) {
 }
 
 $null = & icacls $logDir /grant "$RunAsUser:(OI)(CI)M"
-
-$wsUrl = "http://+:$WsPort/ws/"
-& netsh http delete urlacl url=$wsUrl | Out-Null
-& netsh http add urlacl url=$wsUrl user=$RunAsUser | Out-Null
 
 $taskAction = Join-Path $InstallRoot "DadBoard.exe"
 $taskCommand = "`"$taskAction`""

@@ -21,8 +21,8 @@ Set-ExecutionPolicy -Scope Process Bypass
 This installs `DadBoard.exe` to `C:\Program Files\DadBoard\`, writes `agent.config.json` and `leader.config.json` under `C:\ProgramData\DadBoard\`, and creates a scheduled task `DadBoard` at logon. The optional Start Menu shortcut `DadBoard Leader` launches the app with leader enabled.
 
 ## Verify running
-- Agent log: `C:\Program Files\DadBoard\logs\agent.log`
-- Leader log (if enabled): `C:\Program Files\DadBoard\logs\leader.log`
+- Agent log: `C:\ProgramData\DadBoard\logs\agent.log`
+- Leader log (if enabled): `C:\ProgramData\DadBoard\logs\leader.log`
 - Agent state: `C:\ProgramData\DadBoard\Agent\agent_state.json`
 - Leader known agents (if enabled): `C:\ProgramData\DadBoard\known_agents.json`
 
@@ -31,6 +31,3 @@ This installs `DadBoard.exe` to `C:\Program Files\DadBoard\`, writes `agent.conf
 .\tools\diag_bundle.ps1
 ```
 Output is written to `C:\ProgramData\DadBoard\diag\dadboard_diag_YYYYMMDD_HHMMSS.txt`.
-
-## Troubleshooting
-- If DadBoard fails to start, run `Setup-DadBoard.ps1` as admin to register the WebSocket URL ACL and retry.
