@@ -156,6 +156,11 @@ sealed class TrayAppContext : ApplicationContext
         _uiContext.Post(_ => ShowStatus(), null);
     }
 
+    public void HandleShutdownSignal()
+    {
+        _uiContext.Post(_ => Exit(), null);
+    }
+
     private void ToggleStartLeaderOnLogin()
     {
         _config.StartLeaderOnLogin = _startLeaderOnLoginItem.Checked;
@@ -175,19 +180,22 @@ sealed class TrayAppContext : ApplicationContext
             return;
         }
 
-        using var installForm = new InstallProgressForm(addFirewall: false);
-        installForm.ShowDialog();
-
-        if (!installForm.InstallSucceeded)
+        var exePath = Process.GetCurrentProcess().MainModule?.FileName;
+        if (string.IsNullOrEmpty(exePath))
         {
+            MessageBox.Show("Unable to start installer.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
 
-        var currentExe = Process.GetCurrentProcess().MainModule?.FileName;
-        var installedExe = Installer.GetInstalledExePath();
-        if (!string.IsNullOrEmpty(currentExe) &&
-            string.Equals(currentExe, installedExe, StringComparison.OrdinalIgnoreCase))
+        var startInfo = new ProcessStartInfo(exePath, "--install")
         {
+            UseShellExecute = true
+        };
+
+        var proc = Process.Start(startInfo);
+        if (proc == null)
+        {
+            MessageBox.Show("Failed to launch installer.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
 

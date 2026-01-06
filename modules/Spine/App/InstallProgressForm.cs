@@ -333,16 +333,20 @@ sealed class InstallProgressForm : Form
             }
 
             System.Threading.Thread.Sleep(500);
-            if (proc.HasExited)
+            var exitedEarly = proc.HasExited;
+            if (exitedEarly)
             {
-                return FailLaunch("Installed copy exited immediately.");
+                TryLog("Installed copy exited early; waiting for ready signal.");
             }
 
             TryLog("Launched installed copy.");
 
             if (!InstallHandoff.WaitForReady(_session.Id, TimeSpan.FromSeconds(10)))
             {
-                return FailLaunch("Installed copy did not confirm readiness (timeout).");
+                var reason = exitedEarly
+                    ? "Installed copy exited early and did not confirm readiness (timeout)."
+                    : "Installed copy did not confirm readiness (timeout).";
+                return FailLaunch(reason);
             }
 
             step.Status = InstallStepStatus.Success;
@@ -350,6 +354,14 @@ sealed class InstallProgressForm : Form
             InstallStatusIo.Write(_session.StatusPath, _snapshot);
             TryLog("Installed copy confirmed.");
             LaunchedInstalledCopy = true;
+            if (!_snapshot.Completed)
+            {
+                _snapshot.Completed = true;
+                _snapshot.Success = true;
+                _snapshot.ErrorMessage = null;
+                InstallStatusIo.Write(_session.StatusPath, _snapshot);
+            }
+            CloseAfterSuccess();
             return true;
         }
         catch (Exception ex)

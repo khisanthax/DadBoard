@@ -54,23 +54,35 @@ static class Program
                 }
             }
 
-            using var singleInstance = SingleInstanceManager.TryAcquire();
+            var singleInstance = SingleInstanceManager.TryAcquire();
             if (singleInstance == null)
             {
                 if (!string.IsNullOrWhiteSpace(postInstallId))
                 {
-                    InstallHandoff.SignalReady(postInstallId);
+                    SingleInstanceManager.SignalShutdown();
+                    singleInstance = SingleInstanceManager.TryAcquireWithRetry(TimeSpan.FromSeconds(10), TimeSpan.FromMilliseconds(250));
+                    if (singleInstance == null)
+                    {
+                        return;
+                    }
                 }
-                return;
+                else
+                {
+                    SingleInstanceManager.SignalActivate();
+                    return;
+                }
             }
 
-            using var context = new TrayAppContext(launchOptions);
-            singleInstance.BeginListen(context.HandleActivateSignal);
-            if (!string.IsNullOrWhiteSpace(postInstallId))
+            using (singleInstance)
             {
-                InstallHandoff.SignalReady(postInstallId);
+                using var context = new TrayAppContext(launchOptions);
+                singleInstance.BeginListen(context.HandleActivateSignal, context.HandleShutdownSignal);
+                if (!string.IsNullOrWhiteSpace(postInstallId))
+                {
+                    InstallHandoff.SignalReady(postInstallId);
+                }
+                Application.Run(context);
             }
-            Application.Run(context);
         }
         catch (Exception ex)
         {
