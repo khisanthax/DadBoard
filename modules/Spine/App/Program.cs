@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
@@ -12,15 +12,24 @@ static class Program
     {
         try
         {
-            if (args.Any(arg => string.Equals(arg, "--install", StringComparison.OrdinalIgnoreCase)))
+            if (args.Any(arg => string.Equals(arg, "--install-elevated", StringComparison.OrdinalIgnoreCase)))
             {
-                Installer.RequestElevation(addFirewall: args.Any(a => string.Equals(a, "--add-firewall", StringComparison.OrdinalIgnoreCase)));
+                var logPath = GetArgValue(args, "--install-log");
+                var statusPath = GetArgValue(args, "--install-status");
+                Installer.PerformInstall(
+                    addFirewall: args.Any(a => string.Equals(a, "--add-firewall", StringComparison.OrdinalIgnoreCase)),
+                    logPath: logPath,
+                    statusPath: statusPath);
                 return;
             }
 
-            if (args.Any(arg => string.Equals(arg, "--install-elevated", StringComparison.OrdinalIgnoreCase)))
+            ApplicationConfiguration.Initialize();
+
+            if (args.Any(arg => string.Equals(arg, "--install", StringComparison.OrdinalIgnoreCase)))
             {
-                Installer.PerformInstall(addFirewall: args.Any(a => string.Equals(a, "--add-firewall", StringComparison.OrdinalIgnoreCase)));
+                using var installForm = new InstallProgressForm(addFirewall: args.Any(a =>
+                    string.Equals(a, "--add-firewall", StringComparison.OrdinalIgnoreCase)));
+                installForm.ShowDialog();
                 return;
             }
 
@@ -31,12 +40,12 @@ static class Program
                 var choice = FirstRunForm.ShowChoice();
                 if (choice == FirstRunChoice.Install)
                 {
-                    Installer.RequestElevation(addFirewall: false);
+                    using var installForm = new InstallProgressForm(addFirewall: false);
+                    installForm.ShowDialog();
                     return;
                 }
             }
 
-            ApplicationConfiguration.Initialize();
             using var context = new TrayAppContext(launchOptions);
             Application.Run(context);
         }
@@ -52,5 +61,22 @@ static class Program
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
         }
+    }
+
+    private static string? GetArgValue(string[] args, string name)
+    {
+        var direct = args.FirstOrDefault(a => a.StartsWith(name + "=", StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(direct))
+        {
+            return direct.Substring(name.Length + 1).Trim('"');
+        }
+
+        var idx = Array.FindIndex(args, a => string.Equals(a, name, StringComparison.OrdinalIgnoreCase));
+        if (idx >= 0 && idx < args.Length - 1)
+        {
+            return args[idx + 1].Trim('"');
+        }
+
+        return null;
     }
 }

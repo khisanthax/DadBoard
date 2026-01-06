@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Windows.Forms;
@@ -166,10 +167,23 @@ sealed class TrayAppContext : ApplicationContext
             return;
         }
 
-        if (Installer.RequestElevation(addFirewall: false))
+        using var installForm = new InstallProgressForm(addFirewall: false);
+        installForm.ShowDialog();
+
+        if (!installForm.InstallSucceeded)
         {
-            Exit();
+            return;
         }
+
+        var currentExe = Process.GetCurrentProcess().MainModule?.FileName;
+        var installedExe = Installer.GetInstalledExePath();
+        if (!string.IsNullOrEmpty(currentExe) &&
+            string.Equals(currentExe, installedExe, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        Exit();
     }
 
     private void UpdateMenuState()

@@ -1,7 +1,6 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.IO;
-using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text.Json;
@@ -15,27 +14,36 @@ static class Installer
 
     public static bool IsInstalled()
     {
-        var installExe = GetInstalledExePath();
-        return File.Exists(installExe);
+        return File.Exists(GetInstalledExePath());
     }
 
-    public static bool RequestElevation(bool addFirewall)
+    public static string GetInstalledExePath()
     {
-        if (IsElevated())
-        {
-            PerformInstall(addFirewall);
-            return true;
-        }
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "DadBoard", "DadBoard.exe");
+    }
 
+    public static InstallSession CreateInstallSession()
+    {
+        var timestamp = DateTime.Now;
+        var logPath = GetInstallLogPath(timestamp);
+        var statusPath = GetInstallStatusPath(timestamp);
+        var snapshot = InstallStatusFactory.CreateDefault();
+        snapshot.GetOrAddStep(InstallSteps.Elevate).Status = InstallStepStatus.Running;
+        InstallStatusIo.Write(statusPath, snapshot);
+        return new InstallSession(logPath, statusPath, timestamp);
+    }
+
+    public static Process? StartElevatedInstall(InstallSession session, bool addFirewall)
+    {
         try
         {
             var exePath = Process.GetCurrentProcess().MainModule?.FileName;
             if (string.IsNullOrEmpty(exePath))
             {
-                return false;
+                return null;
             }
 
-            var args = "--install-elevated";
+            var args = $"--install-elevated --install-log \"{session.LogPath}\" --install-status \"{session.StatusPath}\"";
             if (addFirewall)
             {
                 args += " --add-firewall";
@@ -47,16 +55,92 @@ static class Installer
                 Verb = "runas"
             };
 
-            Process.Start(startInfo);
-            return true;
+            return Process.Start(startInfo);
         }
         catch
         {
+            return null;
+        }
+    }
+
+    public static bool PerformInstall(bool addFirewall, string? logPath, string? statusPath)
+    {
+        var logger = new InstallLogger(logPath ?? GetInstallLogPath(DateTime.Now));
+        var tracker = new InstallStatusTracker(statusPath ?? GetInstallStatusPath(DateTime.Now));
+
+        tracker.UpdateStep(InstallSteps.Elevate, InstallStepStatus.Success, "Elevated.");
+        logger.Info("Installer elevated.");
+
+        AgentConfig? agentConfig = null;
+        if (!RunStep(tracker, logger, InstallSteps.CopyExe, "Copying DadBoard.exe", CopySelf))
+        {
+            return false;
+        }
+
+        if (!RunStep(tracker, logger, InstallSteps.CreateData, "Creating ProgramData folders/configs", () =>
+            agentConfig = EnsureDataDirsAndConfigs()))
+        {
+            return false;
+        }
+
+        if (!RunStep(tracker, logger, InstallSteps.CreateTask, "Creating scheduled task DadBoardAgent", () =>
+            RegisterTask(GetInstalledExePath())))
+        {
+            return false;
+        }
+
+        if (addFirewall)
+        {
+            if (agentConfig == null)
+            {
+                agentConfig = LoadExistingConfig(GetProgramDataBaseDir()) ?? new AgentConfig();
+            }
+
+            if (!RunStep(tracker, logger, InstallSteps.Firewall, "Adding firewall rules", () =>
+                AddFirewallRules(agentConfig.UdpPort, agentConfig.WsPort)))
+            {
+                return false;
+            }
+        }
+        else
+        {
+            tracker.UpdateStep(InstallSteps.Firewall, InstallStepStatus.Success, "Skipped.");
+            logger.Info("Firewall rules skipped.");
+        }
+
+        tracker.UpdateStep(InstallSteps.Launch, InstallStepStatus.Pending, "Waiting to launch.");
+        logger.Info("Elevated install steps complete.");
+        return true;
+    }
+
+    public static bool IsElevated()
+    {
+        using var identity = WindowsIdentity.GetCurrent();
+        var principal = new WindowsPrincipal(identity);
+        return principal.IsInRole(WindowsBuiltInRole.Administrator);
+    }
+
+    private static bool RunStep(InstallStatusTracker tracker, InstallLogger logger, string stepName, string logMessage, Action action)
+    {
+        tracker.UpdateStep(stepName, InstallStepStatus.Running, "Running...");
+        logger.Info(logMessage);
+        try
+        {
+            action();
+            tracker.UpdateStep(stepName, InstallStepStatus.Success, "Success.");
+            logger.Info($"{stepName} completed.");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            tracker.UpdateStep(stepName, InstallStepStatus.Failed, ex.Message);
+            tracker.Complete(false, $"{stepName} failed: {ex}");
+            logger.Error($"{stepName} failed: {ex}");
             return false;
         }
     }
 
-    public static void PerformInstall(bool addFirewall)
+    private static void CopySelf()
     {
         var exePath = Process.GetCurrentProcess().MainModule?.FileName;
         if (string.IsNullOrEmpty(exePath))
@@ -68,8 +152,11 @@ static class Installer
         Directory.CreateDirectory(installDir);
         var installExe = Path.Combine(installDir, "DadBoard.exe");
         File.Copy(exePath, installExe, true);
+    }
 
-        var baseDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DadBoard");
+    private static AgentConfig EnsureDataDirsAndConfigs()
+    {
+        var baseDir = GetProgramDataBaseDir();
         Directory.CreateDirectory(baseDir);
         Directory.CreateDirectory(Path.Combine(baseDir, "Agent"));
         Directory.CreateDirectory(Path.Combine(baseDir, "Leader"));
@@ -84,27 +171,24 @@ static class Installer
 
         SaveAgentConfig(Path.Combine(baseDir, "Agent", "agent.config.json"), config);
         EnsureLeaderConfig(Path.Combine(baseDir, "Leader", "leader.config.json"));
-
-        RegisterTask(installExe);
-
-        if (addFirewall)
-        {
-            AddFirewallRules(config.UdpPort, config.WsPort);
-        }
-
-        Process.Start(new ProcessStartInfo(installExe) { UseShellExecute = true });
+        return config;
     }
 
-    public static bool IsElevated()
+    private static string GetProgramDataBaseDir()
     {
-        using var identity = WindowsIdentity.GetCurrent();
-        var principal = new WindowsPrincipal(identity);
-        return principal.IsInRole(WindowsBuiltInRole.Administrator);
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DadBoard");
     }
 
-    private static string GetInstalledExePath()
+    private static string GetInstallLogPath(DateTime timestamp)
     {
-        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "DadBoard", "DadBoard.exe");
+        var logsDir = Path.Combine(GetProgramDataBaseDir(), "logs");
+        return Path.Combine(logsDir, $"install_{timestamp:yyyyMMdd_HHmmss}.log");
+    }
+
+    private static string GetInstallStatusPath(DateTime timestamp)
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "DadBoard");
+        return Path.Combine(tempDir, $"install_status_{timestamp:yyyyMMdd_HHmmss}.json");
     }
 
     private static AgentConfig? LoadExistingConfig(string baseDir)
