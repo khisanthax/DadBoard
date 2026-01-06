@@ -142,6 +142,7 @@ public sealed class AgentService : IDisposable
         try
         {
             var builder = WebApplication.CreateBuilder();
+            _logger.Info("WS backend: Kestrel");
             builder.WebHost.UseUrls($"http://0.0.0.0:{_config.WsPort}");
 
             var app = builder.Build();
