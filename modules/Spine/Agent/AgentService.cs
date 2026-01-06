@@ -5,6 +5,7 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Net.WebSockets;
+using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -133,8 +134,17 @@ public sealed class AgentService : IDisposable
 
     private void SaveConfig(AgentConfig config)
     {
-        var json = JsonSerializer.Serialize(config, JsonUtil.Options);
-        File.WriteAllText(_configPath, json);
+        try
+        {
+            var json = JsonSerializer.Serialize(config, JsonUtil.Options);
+            File.WriteAllText(_configPath, json);
+        }
+        catch (Exception ex)
+        {
+            var identity = WindowsIdentity.GetCurrent().Name;
+            _logger.Error($"FATAL: Failed to write config at {_configPath} as {identity}: {ex.Message}");
+            throw;
+        }
     }
 
     private void StartWebSocketServer()
