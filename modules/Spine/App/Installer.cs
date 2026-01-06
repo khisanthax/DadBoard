@@ -25,12 +25,13 @@ static class Installer
     public static InstallSession CreateInstallSession()
     {
         var timestamp = DateTime.Now;
+        var id = Guid.NewGuid().ToString("N");
         var logPath = GetInstallLogPath(timestamp);
         var statusPath = GetInstallStatusPath(timestamp);
         var snapshot = InstallStatusFactory.CreateDefault();
         snapshot.GetOrAddStep(InstallSteps.Elevate).Status = InstallStepStatus.Running;
         InstallStatusIo.Write(statusPath, snapshot);
-        return new InstallSession(logPath, statusPath, timestamp);
+        return new InstallSession(id, logPath, statusPath, timestamp);
     }
 
     public static Process? StartElevatedInstall(InstallSession session, bool addFirewall)
@@ -43,7 +44,7 @@ static class Installer
                 return null;
             }
 
-            var args = $"--install-elevated --install-log \"{session.LogPath}\" --install-status \"{session.StatusPath}\"";
+            var args = $"--install-elevated --install-log \"{session.LogPath}\" --install-status \"{session.StatusPath}\" --installer-parent {Process.GetCurrentProcess().Id}";
             if (addFirewall)
             {
                 args += " --add-firewall";
@@ -63,7 +64,7 @@ static class Installer
         }
     }
 
-    public static bool PerformInstall(bool addFirewall, string? logPath, string? statusPath)
+    public static bool PerformInstall(bool addFirewall, string? logPath, string? statusPath, int? installerParentPid)
     {
         var logger = new InstallLogger(logPath ?? GetInstallLogPath(DateTime.Now));
         var tracker = new InstallStatusTracker(statusPath ?? GetInstallStatusPath(DateTime.Now));
@@ -74,7 +75,7 @@ static class Installer
         AgentConfig? agentConfig = null;
         if (!RunStep(tracker, logger, InstallSteps.CopyExe, "Copying DadBoard.exe", () =>
         {
-            StopOtherInstances(logger);
+            StopOtherInstances(logger, installerParentPid);
             CopySelf();
         }))
         {
@@ -158,7 +159,7 @@ static class Installer
         File.Copy(exePath, installExe, true);
     }
 
-    private static void StopOtherInstances(InstallLogger logger)
+    private static void StopOtherInstances(InstallLogger logger, int? installerParentPid)
     {
         try
         {
@@ -166,6 +167,11 @@ static class Installer
             foreach (var proc in Process.GetProcessesByName("DadBoard"))
             {
                 if (proc.Id == currentId)
+                {
+                    continue;
+                }
+
+                if (installerParentPid.HasValue && proc.Id == installerParentPid.Value)
                 {
                     continue;
                 }

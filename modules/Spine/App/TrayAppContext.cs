@@ -2,6 +2,7 @@
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Threading;
 using System.Windows.Forms;
 using DadBoard.Agent;
 using DadBoard.Leader;
@@ -14,6 +15,7 @@ sealed class TrayAppContext : ApplicationContext
     private readonly string _baseDir;
     private readonly string _agentConfigPath;
     private readonly AppConfigStore _configStore;
+    private readonly SynchronizationContext _uiContext;
 
     private readonly AgentService _agent;
     private LeaderService? _leader;
@@ -34,6 +36,7 @@ sealed class TrayAppContext : ApplicationContext
     public TrayAppContext(AppLaunchOptions options)
     {
         _options = options;
+        _uiContext = SynchronizationContext.Current ?? new SynchronizationContext();
         _baseDir = DataPaths.ResolveBaseDir();
         _agentConfigPath = Path.Combine(_baseDir, "Agent", "agent.config.json");
         _configStore = new AppConfigStore(_agentConfigPath);
@@ -146,6 +149,11 @@ sealed class TrayAppContext : ApplicationContext
         _statusForm.UpdateLeader(_leader);
         _statusForm.Show();
         _statusForm.BringToFront();
+    }
+
+    public void HandleActivateSignal()
+    {
+        _uiContext.Post(_ => ShowStatus(), null);
     }
 
     private void ToggleStartLeaderOnLogin()

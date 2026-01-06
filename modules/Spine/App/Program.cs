@@ -16,10 +16,17 @@ static class Program
             {
                 var logPath = GetArgValue(args, "--install-log");
                 var statusPath = GetArgValue(args, "--install-status");
+                var parentPid = GetArgValue(args, "--installer-parent");
+                int? parsedParentPid = null;
+                if (int.TryParse(parentPid, out var pid))
+                {
+                    parsedParentPid = pid;
+                }
                 Installer.PerformInstall(
                     addFirewall: args.Any(a => string.Equals(a, "--add-firewall", StringComparison.OrdinalIgnoreCase)),
                     logPath: logPath,
-                    statusPath: statusPath);
+                    statusPath: statusPath,
+                    installerParentPid: parsedParentPid);
                 return;
             }
 
@@ -34,6 +41,7 @@ static class Program
             }
 
             var launchOptions = AppLaunchOptions.Parse(args);
+            var postInstallId = GetArgValue(args, "--postinstall");
 
             if (!Installer.IsInstalled() && !launchOptions.SkipFirstRunPrompt)
             {
@@ -46,7 +54,22 @@ static class Program
                 }
             }
 
+            using var singleInstance = SingleInstanceManager.TryAcquire();
+            if (singleInstance == null)
+            {
+                if (!string.IsNullOrWhiteSpace(postInstallId))
+                {
+                    InstallHandoff.SignalReady(postInstallId);
+                }
+                return;
+            }
+
             using var context = new TrayAppContext(launchOptions);
+            singleInstance.BeginListen(context.HandleActivateSignal);
+            if (!string.IsNullOrWhiteSpace(postInstallId))
+            {
+                InstallHandoff.SignalReady(postInstallId);
+            }
             Application.Run(context);
         }
         catch (Exception ex)

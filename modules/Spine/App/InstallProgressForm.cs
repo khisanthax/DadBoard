@@ -30,6 +30,7 @@ sealed class InstallProgressForm : Form
     private bool _handledExit;
     private bool _installFinished;
     private string? _failureMessage;
+    private bool _exitLogged;
 
     public InstallProgressForm(bool addFirewall)
     {
@@ -289,6 +290,7 @@ sealed class InstallProgressForm : Form
         _snapshot.Success = true;
         _snapshot.ErrorMessage = null;
         InstallStatusIo.Write(_session.StatusPath, _snapshot);
+        CloseAfterSuccess();
     }
 
     private bool LaunchInstalledCopy(bool force)
@@ -323,7 +325,8 @@ sealed class InstallProgressForm : Form
                 return true;
             }
 
-            var proc = Process.Start(new ProcessStartInfo(installedExe) { UseShellExecute = true });
+            var arguments = $"--postinstall {_session.Id}";
+            var proc = Process.Start(new ProcessStartInfo(installedExe, arguments) { UseShellExecute = true });
             if (proc == null)
             {
                 return FailLaunch("Failed to launch installed copy.");
@@ -335,10 +338,17 @@ sealed class InstallProgressForm : Form
                 return FailLaunch("Installed copy exited immediately.");
             }
 
+            TryLog("Launched installed copy.");
+
+            if (!InstallHandoff.WaitForReady(_session.Id, TimeSpan.FromSeconds(10)))
+            {
+                return FailLaunch("Installed copy did not confirm readiness (timeout).");
+            }
+
             step.Status = InstallStepStatus.Success;
-            step.Message = "Launched.";
+            step.Message = "Installed copy confirmed.";
             InstallStatusIo.Write(_session.StatusPath, _snapshot);
-            TryLog("Installed copy launched.");
+            TryLog("Installed copy confirmed.");
             LaunchedInstalledCopy = true;
             return true;
         }
@@ -418,6 +428,10 @@ sealed class InstallProgressForm : Form
         }
 
         UpdateLog();
+        if (_snapshot.Success)
+        {
+            CloseAfterSuccess();
+        }
     }
 
     private void OpenLog()
@@ -448,5 +462,18 @@ sealed class InstallProgressForm : Form
         catch
         {
         }
+    }
+
+    private void CloseAfterSuccess()
+    {
+        if (_exitLogged)
+        {
+            Close();
+            return;
+        }
+
+        _exitLogged = true;
+        TryLog("Installer exiting.");
+        Close();
     }
 }
