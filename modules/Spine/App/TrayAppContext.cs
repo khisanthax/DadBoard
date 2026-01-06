@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Drawing;
 using System.IO;
-using System.Linq;
 using System.Windows.Forms;
 using DadBoard.Agent;
 using DadBoard.Leader;
@@ -27,11 +26,13 @@ sealed class TrayAppContext : ApplicationContext
     private readonly ToolStripMenuItem _installItem;
     private readonly ToolStripMenuItem _statusItem;
 
+    private readonly AppLaunchOptions _options;
     private AgentConfig _config;
     private bool _disposed;
 
-    public TrayAppContext(string[] args)
+    public TrayAppContext(AppLaunchOptions options)
     {
+        _options = options;
         _baseDir = DataPaths.ResolveBaseDir();
         _agentConfigPath = Path.Combine(_baseDir, "Agent", "agent.config.json");
         _configStore = new AppConfigStore(_agentConfigPath);
@@ -72,13 +73,9 @@ sealed class TrayAppContext : ApplicationContext
         };
         _tray.DoubleClick += (_, _) => ShowStatus();
 
-        if (args.Any(arg => string.Equals(arg, "--enable-leader", StringComparison.OrdinalIgnoreCase)))
+        if (_options.Mode == AppMode.Leader || (_options.Mode != AppMode.Agent && _config.StartLeaderOnLogin))
         {
-            EnableLeader(showUI: true);
-        }
-        else if (_config.StartLeaderOnLogin)
-        {
-            EnableLeader(showUI: false);
+            EnableLeader(showUI: _options.Mode == AppMode.Leader);
         }
 
         UpdateMenuState();

@@ -11,7 +11,7 @@ namespace DadBoard.App;
 
 static class Installer
 {
-    private const string TaskName = "DadBoard";
+    private const string TaskName = "DadBoardAgent";
 
     public static bool IsInstalled()
     {
@@ -205,6 +205,7 @@ static class Installer
 
             dynamic action = task.Actions.Create(TaskActionExec);
             action.Path = exePath;
+            action.Arguments = "--mode agent";
 
             root.RegisterTaskDefinition(TaskName, task, TaskCreateOrUpdate, null, null, TaskLogonInteractiveToken, null);
 

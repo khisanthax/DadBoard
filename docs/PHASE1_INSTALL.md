@@ -11,13 +11,11 @@ dotnet publish -c Release -r win-x64 /p:PublishSingleFile=true /p:SelfContained=
 ```
 
 ## Install DadBoard (each PC)
-Copy `DadBoard.exe` from the publish folder to the target PC and run:
+Copy `DadBoard.exe` from the publish folder to the target PC and run it. On first run it will prompt:
+- Install (recommended)
+- Run without installing
 
-```powershell
-.\DadBoard.exe --install
-```
-
-The installer prompts for admin rights, then installs `DadBoard.exe` to `C:\Program Files\DadBoard\`, writes `agent.config.json` and `leader.config.json` under `C:\ProgramData\DadBoard\`, and creates a scheduled task `DadBoard` at logon. After install it relaunches normally.
+If you choose Install, it prompts for admin rights, installs to `C:\Program Files\DadBoard\`, writes configs under `C:\ProgramData\DadBoard\`, and creates a scheduled task `DadBoardAgent` that runs `DadBoard.exe --mode agent` at logon. After install it relaunches normally.
 
 Optional (legacy): `Setup-DadBoard.ps1` is still available if you prefer a PowerShell installer.
 

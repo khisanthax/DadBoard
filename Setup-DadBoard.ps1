@@ -1,7 +1,7 @@
 ﻿param(
     [string]$SourcePath,
     [string]$InstallRoot = "$env:ProgramFiles\DadBoard",
-    [string]$TaskName = "DadBoard",
+    [string]$TaskName = "DadBoardAgent",
     [string]$RunAsUser = "$env:USERDOMAIN\$env:USERNAME",
     [string]$RunAsPassword,
     [int]$UdpPort = 39555,
@@ -122,7 +122,7 @@ if (-not $RunAsPassword) {
 $null = & icacls $logDir /grant "$RunAsUser:(OI)(CI)M"
 
 $taskAction = Join-Path $InstallRoot "DadBoard.exe"
-$taskCommand = "`"$taskAction`""
+$taskCommand = "`"$taskAction`" --mode agent"
 & schtasks.exe /Create /TN $TaskName /TR $taskCommand /SC ONLOGON /RL LIMITED /F /RU $RunAsUser /RP $RunAsPassword /IT | Out-Null
 
 $startMenu = Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\DadBoard"

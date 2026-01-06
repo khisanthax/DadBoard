@@ -24,8 +24,20 @@ static class Program
                 return;
             }
 
+            var launchOptions = AppLaunchOptions.Parse(args);
+
+            if (!Installer.IsInstalled() && !launchOptions.SkipFirstRunPrompt)
+            {
+                var choice = FirstRunForm.ShowChoice();
+                if (choice == FirstRunChoice.Install)
+                {
+                    Installer.RequestElevation(addFirewall: false);
+                    return;
+                }
+            }
+
             ApplicationConfiguration.Initialize();
-            using var context = new TrayAppContext(args);
+            using var context = new TrayAppContext(launchOptions);
             Application.Run(context);
         }
         catch (Exception ex)
