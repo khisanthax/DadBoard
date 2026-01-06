@@ -14,6 +14,8 @@ sealed class AppLaunchOptions
 {
     public AppMode Mode { get; init; } = AppMode.Default;
     public bool SkipFirstRunPrompt { get; init; }
+    public bool StartMinimized { get; init; }
+    public string? PostInstallId { get; init; }
 
     public static AppLaunchOptions Parse(string[] args)
     {
@@ -40,7 +42,9 @@ sealed class AppLaunchOptions
         return new AppLaunchOptions
         {
             Mode = mode,
-            SkipFirstRunPrompt = args.Any(a => string.Equals(a, "--no-first-run", StringComparison.OrdinalIgnoreCase))
+            SkipFirstRunPrompt = args.Any(a => string.Equals(a, "--no-first-run", StringComparison.OrdinalIgnoreCase)),
+            StartMinimized = args.Any(a => string.Equals(a, "--minimized", StringComparison.OrdinalIgnoreCase)),
+            PostInstallId = GetArgValue(args, "--postinstall")
         };
     }
 
@@ -57,5 +61,22 @@ sealed class AppLaunchOptions
         }
 
         return AppMode.Default;
+    }
+
+    private static string? GetArgValue(string[] args, string name)
+    {
+        var direct = args.FirstOrDefault(a => a.StartsWith(name + "=", StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(direct))
+        {
+            return direct.Substring(name.Length + 1).Trim('"');
+        }
+
+        var idx = Array.FindIndex(args, a => string.Equals(a, name, StringComparison.OrdinalIgnoreCase));
+        if (idx >= 0 && idx < args.Length - 1)
+        {
+            return args[idx + 1].Trim('"');
+        }
+
+        return null;
     }
 }

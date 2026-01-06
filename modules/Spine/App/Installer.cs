@@ -44,7 +44,7 @@ static class Installer
                 return null;
             }
 
-            var args = $"--install-elevated --install-log \"{session.LogPath}\" --install-status \"{session.StatusPath}\" --installer-parent {Process.GetCurrentProcess().Id}";
+            var args = $"--install-elevated --install-log \"{session.LogPath}\" --install-status \"{session.StatusPath}\" --installer-parent {Process.GetCurrentProcess().Id} --postinstall-session {session.Id}";
             if (addFirewall)
             {
                 args += " --add-firewall";
@@ -64,7 +64,7 @@ static class Installer
         }
     }
 
-    public static bool PerformInstall(bool addFirewall, string? logPath, string? statusPath, int? installerParentPid)
+    public static bool PerformInstall(bool addFirewall, string? logPath, string? statusPath, int? installerParentPid, string? postInstallId)
     {
         var logger = new InstallLogger(logPath ?? GetInstallLogPath(DateTime.Now));
         var tracker = new InstallStatusTracker(statusPath ?? GetInstallStatusPath(DateTime.Now));
@@ -111,6 +111,14 @@ static class Installer
 
         tracker.UpdateStep(InstallSteps.Launch, InstallStepStatus.Pending, "Waiting to launch.");
         logger.Info("Elevated install steps complete.");
+        if (!string.IsNullOrWhiteSpace(postInstallId))
+        {
+            LaunchInstalledTrayApp(logger, postInstallId);
+        }
+        if (installerParentPid.HasValue && !IsProcessRunning(installerParentPid.Value))
+        {
+            LaunchInstalledTrayFallback(logger);
+        }
         return true;
     }
 
@@ -390,6 +398,61 @@ static class Installer
         }
         catch
         {
+        }
+    }
+
+    private static bool IsProcessRunning(int pid)
+    {
+        try
+        {
+            var proc = Process.GetProcessById(pid);
+            return !proc.HasExited;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static void LaunchInstalledTrayFallback(InstallLogger logger)
+    {
+        try
+        {
+            var exePath = GetInstalledExePath();
+            if (!File.Exists(exePath))
+            {
+                logger.Error("Fallback launch skipped: installed DadBoard.exe not found.");
+                return;
+            }
+
+            var args = "--mode agent --minimized";
+            logger.Info($"Fallback launching installed tray app: \"{exePath}\" {args}");
+            Process.Start(new ProcessStartInfo(exePath, args) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            logger.Error($"Fallback launch failed: {ex.Message}");
+        }
+    }
+
+    private static void LaunchInstalledTrayApp(InstallLogger logger, string postInstallId)
+    {
+        try
+        {
+            var exePath = GetInstalledExePath();
+            if (!File.Exists(exePath))
+            {
+                logger.Error("Launch skipped: installed DadBoard.exe not found.");
+                return;
+            }
+
+            var args = $"--mode agent --minimized --postinstall {postInstallId}";
+            logger.Info($"Launching installed tray app: \"{exePath}\" {args}");
+            Process.Start(new ProcessStartInfo(exePath, args) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            logger.Error($"Launch failed: {ex.Message}");
         }
     }
 }

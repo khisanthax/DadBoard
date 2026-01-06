@@ -36,6 +36,7 @@ sealed class InstallProgressForm : Form
     private bool _userInteracted;
     private DateTime? _autoCloseDeadline;
     private bool _finalLogged;
+    private bool _waitingForTrayReady;
 
     public InstallProgressForm(bool addFirewall)
     {
@@ -313,7 +314,7 @@ sealed class InstallProgressForm : Form
             return;
         }
 
-        if (!LaunchInstalledCopy(force: false))
+        if (!WaitForTrayReady())
         {
             return;
         }
@@ -321,78 +322,31 @@ sealed class InstallProgressForm : Form
         SetSuccessState();
     }
 
-    private bool LaunchInstalledCopy(bool force)
+    private bool WaitForTrayReady()
     {
-        if (!force && _snapshot.Completed)
-        {
-            return false;
-        }
-
+        SetWaitingForTray(true);
         var step = _snapshot.GetOrAddStep(InstallSteps.Launch);
         step.Status = InstallStepStatus.Running;
-        step.Message = "Launching installed copy.";
+        step.Message = "Waiting for tray readiness.";
         InstallStatusIo.Write(_session.StatusPath, _snapshot);
-        TryLog("Launching installed copy.");
+        TryLog("Waiting for tray ready signal.");
 
-        try
+        if (!InstallHandoff.WaitForTrayReady(_session.Id, TimeSpan.FromSeconds(10)))
         {
-            var installedExe = Installer.GetInstalledExePath();
-            if (!File.Exists(installedExe))
-            {
-                return FailLaunch("Installed DadBoard.exe not found.");
-            }
-
-            var currentExe = Process.GetCurrentProcess().MainModule?.FileName;
-            if (!string.IsNullOrEmpty(currentExe) &&
-                string.Equals(currentExe, installedExe, StringComparison.OrdinalIgnoreCase))
-            {
-                step.Status = InstallStepStatus.Success;
-                step.Message = "Already running.";
-                InstallStatusIo.Write(_session.StatusPath, _snapshot);
-                LaunchedInstalledCopy = false;
-                return true;
-            }
-
-            var arguments = $"--postinstall {_session.Id}";
-            var proc = Process.Start(new ProcessStartInfo(installedExe, arguments) { UseShellExecute = true });
-            if (proc == null)
-            {
-                return FailLaunch("Failed to launch installed copy.");
-            }
-
-            System.Threading.Thread.Sleep(500);
-            var exitedEarly = proc.HasExited;
-            if (exitedEarly)
-            {
-                TryLog("Installed copy exited early; waiting for ready signal.");
-            }
-
-            TryLog("Launched installed copy.");
-
-            if (!InstallHandoff.WaitForReady(_session.Id, TimeSpan.FromSeconds(10)))
-            {
-                var reason = exitedEarly
-                    ? "Installed copy exited early and did not confirm readiness (timeout)."
-                    : "Installed copy did not confirm readiness (timeout).";
-                return FailLaunch(reason);
-            }
-
-            step.Status = InstallStepStatus.Success;
-            step.Message = "Installed copy confirmed.";
-            InstallStatusIo.Write(_session.StatusPath, _snapshot);
-            TryLog("Installed copy confirmed.");
-            LaunchedInstalledCopy = true;
-            SetSuccessState();
-            return true;
+            return FailLaunch("Installed tray did not confirm readiness (timeout).");
         }
-        catch (Exception ex)
-        {
-            return FailLaunch(ex.Message);
-        }
+
+        step.Status = InstallStepStatus.Success;
+        step.Message = "Tray ready confirmed.";
+        InstallStatusIo.Write(_session.StatusPath, _snapshot);
+        TryLog("Tray ready confirmed.");
+        LaunchedInstalledCopy = true;
+        return true;
     }
 
     private bool FailLaunch(string message)
     {
+        SetWaitingForTray(false);
         var agentLine = TryGetLastAgentLogLine();
         if (!string.IsNullOrWhiteSpace(agentLine))
         {
@@ -412,6 +366,7 @@ sealed class InstallProgressForm : Form
 
     private void MarkFailure(string message)
     {
+        SetWaitingForTray(false);
         _failureMessage = message;
         _snapshot.Completed = true;
         _snapshot.Success = false;
@@ -507,6 +462,7 @@ sealed class InstallProgressForm : Form
 
     private void SetSuccessState()
     {
+        SetWaitingForTray(false);
         if (!_snapshot.Completed)
         {
             _snapshot.Completed = true;
@@ -533,6 +489,16 @@ sealed class InstallProgressForm : Form
 
         _autoCloseDeadline = DateTime.UtcNow.AddSeconds(_autoCloseSeconds);
         _autoCloseTimer.Start();
+    }
+
+    private void SetWaitingForTray(bool waiting)
+    {
+        _waitingForTrayReady = waiting;
+        _closeButton.Enabled = !waiting;
+        if (waiting)
+        {
+            _summaryLabel.Text = "Finishing setup... please wait.";
+        }
     }
 
     private void AutoCloseTick()
@@ -610,6 +576,13 @@ sealed class InstallProgressForm : Form
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        if (_waitingForTrayReady)
+        {
+            _summaryLabel.Text = "Finishing setup... please wait.";
+            e.Cancel = true;
+            return;
+        }
+
         LogFinalIfNeeded();
         base.OnFormClosing(e);
     }

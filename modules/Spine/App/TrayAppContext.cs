@@ -16,6 +16,8 @@ sealed class TrayAppContext : ApplicationContext
     private readonly string _agentConfigPath;
     private readonly AppConfigStore _configStore;
     private readonly SynchronizationContext _uiContext;
+    private readonly string? _postInstallId;
+    private System.Windows.Forms.Timer? _postInstallTimer;
 
     private readonly AgentService _agent;
     private LeaderService? _leader;
@@ -37,6 +39,7 @@ sealed class TrayAppContext : ApplicationContext
     {
         _options = options;
         _uiContext = SynchronizationContext.Current ?? new SynchronizationContext();
+        _postInstallId = options.PostInstallId;
         _baseDir = DataPaths.ResolveBaseDir();
         _agentConfigPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -80,6 +83,7 @@ sealed class TrayAppContext : ApplicationContext
             ContextMenuStrip = menu
         };
         _tray.DoubleClick += (_, _) => ShowStatus();
+        SignalTrayReadyWhenReady();
 
         if (_options.Mode == AppMode.Leader || (_options.Mode != AppMode.Agent && _config.StartLeaderOnLogin))
         {
@@ -165,6 +169,27 @@ sealed class TrayAppContext : ApplicationContext
         _uiContext.Post(_ => Exit(), null);
     }
 
+    private void SignalTrayReadyWhenReady()
+    {
+        if (string.IsNullOrWhiteSpace(_postInstallId))
+        {
+            return;
+        }
+
+        _postInstallTimer = new System.Windows.Forms.Timer
+        {
+            Interval = 250
+        };
+        _postInstallTimer.Tick += (_, _) =>
+        {
+            _postInstallTimer?.Stop();
+            _postInstallTimer?.Dispose();
+            _postInstallTimer = null;
+            InstallHandoff.SignalTrayReady(_postInstallId);
+        };
+        _postInstallTimer.Start();
+    }
+
     private void ToggleStartLeaderOnLogin()
     {
         _config.StartLeaderOnLogin = _startLeaderOnLoginItem.Checked;
@@ -230,6 +255,8 @@ sealed class TrayAppContext : ApplicationContext
         if (disposing && !_disposed)
         {
             _disposed = true;
+            _postInstallTimer?.Stop();
+            _postInstallTimer?.Dispose();
             _tray.Dispose();
             _leader?.Dispose();
             _agent.Dispose();
