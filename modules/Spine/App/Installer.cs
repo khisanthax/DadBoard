@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text.Json;
 using DadBoard.Spine.Shared;
@@ -84,7 +85,7 @@ static class Installer
         }
 
         if (!RunStep(tracker, logger, InstallSteps.CreateData, "Creating ProgramData folders/configs", () =>
-            agentConfig = EnsureDataDirsAndConfigs()))
+            agentConfig = EnsureDataDirsAndConfigs(logger)))
         {
             return false;
         }
@@ -206,7 +207,7 @@ static class Installer
         }
     }
 
-    private static AgentConfig EnsureDataDirsAndConfigs()
+    private static AgentConfig EnsureDataDirsAndConfigs(InstallLogger logger)
     {
         var baseDir = GetProgramDataBaseDir();
         Directory.CreateDirectory(baseDir);
@@ -214,6 +215,7 @@ static class Installer
         Directory.CreateDirectory(Path.Combine(baseDir, "Leader"));
         Directory.CreateDirectory(Path.Combine(baseDir, "logs"));
         Directory.CreateDirectory(Path.Combine(baseDir, "diag"));
+        ApplyProgramDataAcl(baseDir, logger);
 
         var config = LoadExistingConfig(baseDir) ?? new AgentConfig
         {
@@ -361,6 +363,54 @@ static class Installer
     {
         RunNetsh($"advfirewall firewall add rule name=\"DadBoard UDP {udpPort}\" dir=in action=allow protocol=UDP localport={udpPort}");
         RunNetsh($"advfirewall firewall add rule name=\"DadBoard WS {wsPort}\" dir=in action=allow protocol=TCP localport={wsPort}");
+    }
+
+    private static void ApplyProgramDataAcl(string baseDir, InstallLogger logger)
+    {
+        try
+        {
+            logger.Info("Applying ProgramData ACLs.");
+            var users = new NTAccount("BUILTIN", "Users");
+            var admins = new NTAccount("BUILTIN", "Administrators");
+            var inheritance = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
+            var propagation = PropagationFlags.None;
+
+            void ApplyToDirectory(string path)
+            {
+                var dirInfo = new DirectoryInfo(path);
+                var security = dirInfo.GetAccessControl();
+                security.SetAccessRule(new FileSystemAccessRule(users, FileSystemRights.Modify, inheritance, propagation, AccessControlType.Allow));
+                security.SetAccessRule(new FileSystemAccessRule(admins, FileSystemRights.FullControl, inheritance, propagation, AccessControlType.Allow));
+                dirInfo.SetAccessControl(security);
+            }
+
+            void ApplyToFile(string path)
+            {
+                var fileInfo = new FileInfo(path);
+                var security = fileInfo.GetAccessControl();
+                security.SetAccessRule(new FileSystemAccessRule(users, FileSystemRights.Modify, AccessControlType.Allow));
+                security.SetAccessRule(new FileSystemAccessRule(admins, FileSystemRights.FullControl, AccessControlType.Allow));
+                fileInfo.SetAccessControl(security);
+            }
+
+            ApplyToDirectory(baseDir);
+            foreach (var dir in Directory.GetDirectories(baseDir, "*", SearchOption.AllDirectories))
+            {
+                ApplyToDirectory(dir);
+            }
+
+            foreach (var file in Directory.GetFiles(baseDir, "*", SearchOption.AllDirectories))
+            {
+                ApplyToFile(file);
+            }
+
+            logger.Info("ProgramData ACLs applied.");
+        }
+        catch (Exception ex)
+        {
+            logger.Error($"Failed to apply ProgramData ACLs: {ex}");
+            throw new InvalidOperationException($"Failed to apply ProgramData ACLs: {ex.Message}");
+        }
     }
 
     private static void RunNetsh(string args)

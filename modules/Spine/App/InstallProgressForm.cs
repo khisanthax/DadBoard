@@ -393,6 +393,12 @@ sealed class InstallProgressForm : Form
 
     private bool FailLaunch(string message)
     {
+        var agentLine = TryGetLastAgentLogLine();
+        if (!string.IsNullOrWhiteSpace(agentLine))
+        {
+            message = $"{message} Last agent.log: {agentLine}";
+        }
+
         var step = _snapshot.GetOrAddStep(InstallSteps.Launch);
         step.Status = InstallStepStatus.Failed;
         step.Message = message;
@@ -606,5 +612,41 @@ sealed class InstallProgressForm : Form
     {
         LogFinalIfNeeded();
         base.OnFormClosing(e);
+    }
+
+    private string? TryGetLastAgentLogLine()
+    {
+        try
+        {
+            var baseDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DadBoard");
+            var logPath = Path.Combine(baseDir, "logs", "agent.log");
+            if (!File.Exists(logPath))
+            {
+                return null;
+            }
+
+            return ReadLastNonEmptyLine(logPath);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? ReadLastNonEmptyLine(string path)
+    {
+        string? last = null;
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var reader = new StreamReader(stream, Encoding.UTF8, true);
+        while (!reader.EndOfStream)
+        {
+            var line = reader.ReadLine();
+            if (!string.IsNullOrWhiteSpace(line))
+            {
+                last = line;
+            }
+        }
+
+        return last;
     }
 }
