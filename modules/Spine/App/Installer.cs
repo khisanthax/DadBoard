@@ -72,7 +72,11 @@ static class Installer
         logger.Info("Installer elevated.");
 
         AgentConfig? agentConfig = null;
-        if (!RunStep(tracker, logger, InstallSteps.CopyExe, "Copying DadBoard.exe", CopySelf))
+        if (!RunStep(tracker, logger, InstallSteps.CopyExe, "Copying DadBoard.exe", () =>
+        {
+            StopOtherInstances(logger);
+            CopySelf();
+        }))
         {
             return false;
         }
@@ -152,6 +156,47 @@ static class Installer
         Directory.CreateDirectory(installDir);
         var installExe = Path.Combine(installDir, "DadBoard.exe");
         File.Copy(exePath, installExe, true);
+    }
+
+    private static void StopOtherInstances(InstallLogger logger)
+    {
+        try
+        {
+            var currentId = Process.GetCurrentProcess().Id;
+            foreach (var proc in Process.GetProcessesByName("DadBoard"))
+            {
+                if (proc.Id == currentId)
+                {
+                    continue;
+                }
+
+                logger.Info($"Stopping running DadBoard.exe (PID {proc.Id}).");
+                try
+                {
+                    if (proc.CloseMainWindow())
+                    {
+                        if (!proc.WaitForExit(3000))
+                        {
+                            proc.Kill(entireProcessTree: true);
+                            proc.WaitForExit(3000);
+                        }
+                    }
+                    else
+                    {
+                        proc.Kill(entireProcessTree: true);
+                        proc.WaitForExit(3000);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger.Error($"Failed to stop DadBoard.exe PID {proc.Id}: {ex.Message}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.Error($"Failed to enumerate running DadBoard.exe: {ex.Message}");
+        }
     }
 
     private static AgentConfig EnsureDataDirsAndConfigs()
