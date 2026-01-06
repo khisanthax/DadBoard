@@ -2,7 +2,6 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text.Json;
 using DadBoard.Spine.Shared;
@@ -369,42 +368,33 @@ static class Installer
     {
         try
         {
-            logger.Info("Applying ProgramData ACLs.");
-            var users = new NTAccount("BUILTIN", "Users");
-            var admins = new NTAccount("BUILTIN", "Administrators");
-            var inheritance = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
-            var propagation = PropagationFlags.None;
-
-            void ApplyToDirectory(string path)
+            logger.Info("Applying ProgramData ACLs via icacls.");
+            var args = $"\"{baseDir}\" /grant Users:(OI)(CI)M /T";
+            var start = new ProcessStartInfo("icacls", args)
             {
-                var dirInfo = new DirectoryInfo(path);
-                var security = dirInfo.GetAccessControl();
-                security.SetAccessRule(new FileSystemAccessRule(users, FileSystemRights.Modify, inheritance, propagation, AccessControlType.Allow));
-                security.SetAccessRule(new FileSystemAccessRule(admins, FileSystemRights.FullControl, inheritance, propagation, AccessControlType.Allow));
-                dirInfo.SetAccessControl(security);
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardError = true,
+                RedirectStandardOutput = true
+            };
+
+            using var proc = Process.Start(start);
+            if (proc == null)
+            {
+                throw new InvalidOperationException("Failed to start icacls.");
             }
 
-            void ApplyToFile(string path)
+            var output = proc.StandardOutput.ReadToEnd();
+            var error = proc.StandardError.ReadToEnd();
+            proc.WaitForExit();
+
+            if (proc.ExitCode != 0)
             {
-                var fileInfo = new FileInfo(path);
-                var security = fileInfo.GetAccessControl();
-                security.SetAccessRule(new FileSystemAccessRule(users, FileSystemRights.Modify, AccessControlType.Allow));
-                security.SetAccessRule(new FileSystemAccessRule(admins, FileSystemRights.FullControl, AccessControlType.Allow));
-                fileInfo.SetAccessControl(security);
+                logger.Error($"icacls failed with exit code {proc.ExitCode}: {error}");
+                throw new InvalidOperationException($"icacls failed with exit code {proc.ExitCode}: {error}");
             }
 
-            ApplyToDirectory(baseDir);
-            foreach (var dir in Directory.GetDirectories(baseDir, "*", SearchOption.AllDirectories))
-            {
-                ApplyToDirectory(dir);
-            }
-
-            foreach (var file in Directory.GetFiles(baseDir, "*", SearchOption.AllDirectories))
-            {
-                ApplyToFile(file);
-            }
-
-            logger.Info("ProgramData ACLs applied.");
+            logger.Info("ProgramData ACLs applied successfully.");
         }
         catch (Exception ex)
         {
