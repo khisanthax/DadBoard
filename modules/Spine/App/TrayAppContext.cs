@@ -120,6 +120,7 @@ sealed class TrayAppContext : ApplicationContext
             return;
         }
 
+        _leaderForm?.AllowClose();
         _leaderForm?.Close();
         _leaderForm = null;
 

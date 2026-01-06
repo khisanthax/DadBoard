@@ -14,6 +14,8 @@ public sealed class LeaderForm : Form
     private readonly DataGridView _grid = new();
     private readonly Label _statusLabel = new();
     private readonly System.Windows.Forms.Timer _refreshTimer = new();
+    private readonly EventHandler _refreshHandler;
+    private bool _allowClose;
 
     public LeaderForm(LeaderService service)
     {
@@ -41,10 +43,13 @@ public sealed class LeaderForm : Form
         Controls.Add(layout);
 
         _refreshTimer.Interval = 1000;
-        _refreshTimer.Tick += (_, _) => RefreshGrid();
+        _refreshHandler = (_, _) => RefreshGridSafe();
+        _refreshTimer.Tick += _refreshHandler;
         _refreshTimer.Start();
 
-        Load += (_, _) => RefreshGrid();
+        Load += (_, _) => RefreshGridSafe();
+        FormClosing += OnFormClosing;
+        FormClosed += OnFormClosed;
     }
 
     private Control BuildLeftPanel()
@@ -85,18 +90,29 @@ public sealed class LeaderForm : Form
         _grid.RowHeadersVisible = false;
         _grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
 
-        _grid.Columns.Add("name", "PC");
-        _grid.Columns.Add("ip", "IP");
-        _grid.Columns.Add("online", "Online");
-        _grid.Columns.Add("lastSeen", "Last Seen");
-        _grid.Columns.Add("status", "Status");
-        _grid.Columns.Add("message", "Message");
+        EnsureGridColumns();
 
         return _grid;
     }
 
-    private void RefreshGrid()
+    private void RefreshGridSafe()
     {
+        if (IsDisposed || Disposing || !_grid.IsHandleCreated || _grid.IsDisposed)
+        {
+            return;
+        }
+
+        if (InvokeRequired)
+        {
+            BeginInvoke(new Action(RefreshGridSafe));
+            return;
+        }
+
+        if (_grid.Columns.Count == 0)
+        {
+            EnsureGridColumns();
+        }
+
         var snapshot = _service.GetAgentsSnapshot();
         _grid.Rows.Clear();
 
@@ -115,6 +131,21 @@ public sealed class LeaderForm : Form
         _statusLabel.Text = $"Agents online: {snapshot.Count(a => a.Online)} / {snapshot.Count}";
     }
 
+    private void EnsureGridColumns()
+    {
+        if (_grid.Columns.Count > 0)
+        {
+            return;
+        }
+
+        _grid.Columns.Add("name", "PC");
+        _grid.Columns.Add("ip", "IP");
+        _grid.Columns.Add("online", "Online");
+        _grid.Columns.Add("lastSeen", "Last Seen");
+        _grid.Columns.Add("status", "Status");
+        _grid.Columns.Add("message", "Message");
+    }
+
     private void LaunchSelected()
     {
         if (_gameList.SelectedItem is not GameDefinition game)
@@ -125,5 +156,28 @@ public sealed class LeaderForm : Form
 
         _service.LaunchOnAll(game);
         _statusLabel.Text = $"Launch triggered: {game.Name}";
+    }
+
+    public void AllowClose()
+    {
+        _allowClose = true;
+    }
+
+    private void OnFormClosing(object? sender, FormClosingEventArgs e)
+    {
+        if (_allowClose)
+        {
+            return;
+        }
+
+        e.Cancel = true;
+        Hide();
+    }
+
+    private void OnFormClosed(object? sender, FormClosedEventArgs e)
+    {
+        _refreshTimer.Stop();
+        _refreshTimer.Tick -= _refreshHandler;
+        _refreshTimer.Dispose();
     }
 }
