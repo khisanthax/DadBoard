@@ -261,6 +261,7 @@ public sealed class AgentService : IDisposable
                 return;
             }
 
+            _logger.Info($"Received LaunchExe corr={envelope.CorrelationId} exe={command.ExePath}");
             _state.LastCommandId = envelope.CorrelationId;
             _state.LastCommandType = envelope.Type;
             _state.LastCommandTs = DateTime.UtcNow.ToString("O");
@@ -315,23 +316,29 @@ public sealed class AgentService : IDisposable
     {
         SendStatus(correlationId, "received", null, "Command received.");
         SendAck(socket, correlationId, ok: true, null);
+        _logger.Info($"LaunchExe ack sent corr={correlationId}.");
 
         try
         {
             if (string.IsNullOrWhiteSpace(command.ExePath))
             {
                 SendStatus(correlationId, "failed", null, "No exePath provided.");
+                _logger.Warn($"LaunchExe failed corr={correlationId}: no exePath provided.");
                 return;
             }
 
             SendStatus(correlationId, "launching", null, $"Launching {command.ExePath}.");
-            Process.Start(new ProcessStartInfo(command.ExePath) { UseShellExecute = true });
+            var startInfo = new ProcessStartInfo(command.ExePath) { UseShellExecute = true };
+            _logger.Info($"LaunchExe starting corr={correlationId} exe={startInfo.FileName} shell={startInfo.UseShellExecute}.");
+            Process.Start(startInfo);
             await Task.Delay(500, _cts.Token).ConfigureAwait(false);
             SendStatus(correlationId, "running", null, "Process started.");
+            _logger.Info($"LaunchExe running corr={correlationId}.");
         }
         catch (Exception ex)
         {
             SendStatus(correlationId, "failed", null, ex.Message);
+            _logger.Error($"LaunchExe failed corr={correlationId}: {ex.Message}");
         }
     }
 

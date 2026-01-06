@@ -296,10 +296,10 @@ static class Installer
 
             task.Principal.LogonType = TaskLogonInteractiveToken;
             task.Principal.RunLevel = TaskRunLevelLua;
-            task.Principal.UserId = WindowsIdentity.GetCurrent().Name;
+            task.Principal.UserId = null;
 
             dynamic trigger = task.Triggers.Create(TaskTriggerLogon);
-            trigger.UserId = WindowsIdentity.GetCurrent().Name;
+            trigger.UserId = null;
 
             dynamic action = task.Actions.Create(TaskActionExec);
             action.Path = exePath;

@@ -15,6 +15,7 @@ public sealed class LeaderForm : Form
     private readonly Label _statusLabel = new();
     private readonly System.Windows.Forms.Timer _refreshTimer = new();
     private readonly EventHandler _refreshHandler;
+    private readonly Button _testButton = new();
     private bool _allowClose;
 
     public LeaderForm(LeaderService service)
@@ -79,9 +80,12 @@ public sealed class LeaderForm : Form
         button.Click += (_, _) => LaunchSelected();
         panel.Controls.Add(button, 0, 2);
 
-        var testButton = new Button { Text = "Test: Open Notepad", Dock = DockStyle.Top, Height = 32 };
-        testButton.Click += (_, _) => SendTestCommand();
-        panel.Controls.Add(testButton, 0, 3);
+        _testButton.Text = "Test: Open Notepad";
+        _testButton.Dock = DockStyle.Top;
+        _testButton.Height = 32;
+        _testButton.Enabled = false;
+        _testButton.Click += (_, _) => SendTestCommand();
+        panel.Controls.Add(_testButton, 0, 3);
 
         return panel;
     }
@@ -96,6 +100,7 @@ public sealed class LeaderForm : Form
         _grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
         _grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
         _grid.MultiSelect = false;
+        _grid.SelectionChanged += (_, _) => UpdateTestButtonState();
 
         EnsureGridColumns();
 
@@ -120,6 +125,7 @@ public sealed class LeaderForm : Form
             EnsureGridColumns();
         }
 
+        var selectedPcId = GetSelectedAgentPcId();
         var snapshot = _service.GetAgentsSnapshot();
         _grid.Rows.Clear();
 
@@ -136,6 +142,20 @@ public sealed class LeaderForm : Form
             );
         }
 
+        _grid.ClearSelection();
+        if (!string.IsNullOrWhiteSpace(selectedPcId))
+        {
+            foreach (DataGridViewRow row in _grid.Rows)
+            {
+                if (row.Cells["pcId"].Value?.ToString() == selectedPcId)
+                {
+                    row.Selected = true;
+                    break;
+                }
+            }
+        }
+
+        UpdateTestButtonState();
         _statusLabel.Text = $"Agents online: {snapshot.Count(a => a.Online)} / {snapshot.Count}";
     }
 
@@ -171,9 +191,16 @@ public sealed class LeaderForm : Form
     private void SendTestCommand()
     {
         var pcId = GetSelectedAgentPcId();
-        if (string.IsNullOrWhiteSpace(pcId))
+        var ip = GetSelectedAgentIp();
+        if (string.IsNullOrWhiteSpace(pcId) || string.IsNullOrWhiteSpace(ip))
         {
             MessageBox.Show("Select an agent row first.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        if (_service.IsLocalAgent(pcId, ip))
+        {
+            MessageBox.Show("Select a remote agent (not this PC).", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
@@ -195,6 +222,36 @@ public sealed class LeaderForm : Form
 
         var row = _grid.SelectedRows[0];
         return row.Cells["pcId"].Value?.ToString();
+    }
+
+    private string? GetSelectedAgentIp()
+    {
+        if (_grid.SelectedRows.Count == 0)
+        {
+            return null;
+        }
+
+        var row = _grid.SelectedRows[0];
+        return row.Cells["ip"].Value?.ToString();
+    }
+
+    private void UpdateTestButtonState()
+    {
+        if (_grid.SelectedRows.Count == 0)
+        {
+            _testButton.Enabled = false;
+            return;
+        }
+
+        var pcId = GetSelectedAgentPcId();
+        var ip = GetSelectedAgentIp();
+        if (string.IsNullOrWhiteSpace(pcId) || string.IsNullOrWhiteSpace(ip))
+        {
+            _testButton.Enabled = false;
+            return;
+        }
+
+        _testButton.Enabled = !_service.IsLocalAgent(pcId, ip);
     }
 
     public void AllowClose()

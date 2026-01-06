@@ -27,6 +27,8 @@ public sealed class LeaderService : IDisposable
     private readonly LeaderLogger _logger;
     private readonly KnownAgentsStore _knownAgentsStore;
     private readonly LeaderStateWriter _stateWriter;
+    private readonly string? _localAgentPcId;
+    private readonly HashSet<string> _localIps;
 
     private LeaderConfig _config = new();
 
@@ -55,6 +57,8 @@ public sealed class LeaderService : IDisposable
         _logger = new LeaderLogger(Path.Combine(_logDir, "leader.log"));
         _knownAgentsStore = new KnownAgentsStore(_knownAgentsPath);
         _stateWriter = new LeaderStateWriter(_statePath);
+        _localAgentPcId = TryLoadLocalAgentPcId();
+        _localIps = GetLocalIps();
 
         _config = LoadConfig();
 
@@ -67,6 +71,17 @@ public sealed class LeaderService : IDisposable
     public LeaderConfig Config => _config;
 
     public IReadOnlyList<GameDefinition> GetGames() => _config.Games;
+
+    public bool IsLocalAgent(string pcId, string ip)
+    {
+        if (!string.IsNullOrWhiteSpace(_localAgentPcId) &&
+            string.Equals(pcId, _localAgentPcId, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return !string.IsNullOrWhiteSpace(ip) && _localIps.Contains(ip);
+    }
 
     public IReadOnlyList<AgentInfo> GetAgentsSnapshot()
     {
@@ -302,6 +317,7 @@ public sealed class LeaderService : IDisposable
         agent.LastStatus = "sent";
         agent.LastStatusMessage = $"Sent {exePath}";
         StartTimeout(agent.PcId, correlationId);
+        _logger.Info($"Sending LaunchExe to pcId={agent.PcId} ip={agent.Ip} ws={agent.WsPort} exe={exePath} corr={correlationId}");
 
         try
         {
@@ -312,6 +328,55 @@ public sealed class LeaderService : IDisposable
             agent.LastStatus = "failed";
             agent.LastStatusMessage = ex.Message;
         }
+    }
+
+    private static string? TryLoadLocalAgentPcId()
+    {
+        try
+        {
+            var path = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "DadBoard",
+                "Agent",
+                "agent.config.json");
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            var json = File.ReadAllText(path);
+            var config = JsonSerializer.Deserialize<AgentConfig>(json, JsonUtil.Options);
+            return config?.PcId;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static HashSet<string> GetLocalIps()
+    {
+        var ips = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "127.0.0.1"
+        };
+
+        try
+        {
+            var host = Dns.GetHostEntry(Dns.GetHostName());
+            foreach (var ip in host.AddressList)
+            {
+                if (ip.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(ip))
+                {
+                    ips.Add(ip.ToString());
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        return ips;
     }
 
     private void StartTimeout(string pcId, string correlationId)
