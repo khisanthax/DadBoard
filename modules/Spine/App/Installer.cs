@@ -71,6 +71,7 @@ static class Installer
 
         tracker.UpdateStep(InstallSteps.Elevate, InstallStepStatus.Success, "Elevated.");
         logger.Info("Installer elevated.");
+        logger.Info($"Installer parent pid: {(installerParentPid.HasValue ? installerParentPid.Value.ToString() : "unknown")}");
 
         AgentConfig? agentConfig = null;
         if (!RunStep(tracker, logger, InstallSteps.CopyExe, "Copying DadBoard.exe", () =>
@@ -183,13 +184,13 @@ static class Installer
                     {
                         if (!proc.WaitForExit(3000))
                         {
-                            proc.Kill(entireProcessTree: true);
+                            proc.Kill();
                             proc.WaitForExit(3000);
                         }
                     }
                     else
                     {
-                        proc.Kill(entireProcessTree: true);
+                        proc.Kill();
                         proc.WaitForExit(3000);
                     }
                 }

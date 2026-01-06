@@ -161,6 +161,7 @@ sealed class InstallProgressForm : Form
             InstallStatusIo.Write(_session.StatusPath, _snapshot);
             UpdateSteps(_snapshot);
             TryLog("Install started.");
+            SingleInstanceManager.SignalShutdown();
 
             _installProcess = Installer.StartElevatedInstall(_session, _addFirewall);
             if (_installProcess == null)
