@@ -15,13 +15,14 @@ Copy `DadBoard.exe` from the publish folder to the target PC and run it. On firs
 - Install (recommended)
 - Run without installing
 
-If you choose Install, it prompts for admin rights, installs to `C:\Program Files\DadBoard\`, writes configs under `C:\ProgramData\DadBoard\`, and creates a scheduled task `DadBoardAgent` that runs `DadBoard.exe --mode agent` at logon. After install it relaunches normally.
+If you choose Install, it prompts for admin rights, installs to `C:\Program Files\DadBoard\`, writes leader/config data under `C:\ProgramData\DadBoard\`, and stores the agent config under `%LOCALAPPDATA%\DadBoard\Agent\agent.config.json`. It creates a scheduled task `DadBoardAgent` that runs `DadBoard.exe --mode agent` at logon. After install it relaunches normally.
 
 Optional (legacy): `Setup-DadBoard.ps1` is still available if you prefer a PowerShell installer.
 
 ## Verify running
 - Agent log: `C:\ProgramData\DadBoard\logs\agent.log`
 - Leader log (if enabled): `C:\ProgramData\DadBoard\logs\leader.log`
+- Agent config: `%LOCALAPPDATA%\DadBoard\Agent\agent.config.json`
 - Agent state: `C:\ProgramData\DadBoard\Agent\agent_state.json`
 - Leader known agents (if enabled): `C:\ProgramData\DadBoard\known_agents.json`
 

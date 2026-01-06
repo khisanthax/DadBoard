@@ -35,41 +35,6 @@ function Copy-IfDifferent {
     Copy-Item -Path $Source -Destination $Destination -Force
 }
 
-function Write-AgentConfig {
-    param(
-        [string]$Path,
-        [int]$UdpPort,
-        [int]$WsPort
-    )
-
-    $pcId = ""
-    $displayName = $env:COMPUTERNAME
-    $startLeader = $false
-    if (Test-Path -Path $Path) {
-        try {
-            $existing = Get-Content -Path $Path -Raw | ConvertFrom-Json
-            if ($existing.pcId) { $pcId = $existing.pcId }
-            if ($existing.displayName) { $displayName = $existing.displayName }
-            if ($existing.startLeaderOnLogin -ne $null) { $startLeader = [bool]$existing.startLeaderOnLogin }
-        } catch { }
-    }
-
-    if (-not $pcId) {
-        $pcId = [Guid]::NewGuid().ToString("N")
-    }
-
-    $config = [pscustomobject]@{
-        pcId = $pcId
-        displayName = $displayName
-        udpPort = $UdpPort
-        wsPort = $WsPort
-        helloIntervalMs = 1000
-        version = "1.0"
-        startLeaderOnLogin = $startLeader
-    }
-
-    $config | ConvertTo-Json -Depth 4 | Set-Content -Path $Path -Encoding UTF8
-}
 
 Assert-Admin
 
@@ -105,8 +70,7 @@ Get-ChildItem -Path $SourcePath -File | ForEach-Object {
     Copy-IfDifferent -Source $_.FullName -Destination (Join-Path $InstallRoot $_.Name)
 }
 
-$configPath = Join-Path $agentDir "agent.config.json"
-Write-AgentConfig -Path $configPath -UdpPort $UdpPort -WsPort $WsPort
+# Agent config is now stored per-user under %LOCALAPPDATA%\DadBoard\Agent\agent.config.json
 
 $leaderConfigPath = Join-Path $leaderDir "leader.config.json"
 $defaultLeaderConfig = Join-Path $PSScriptRoot "modules\Spine\Leader\leader.config.json"

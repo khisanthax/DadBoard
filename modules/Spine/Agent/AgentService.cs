@@ -46,10 +46,11 @@ public sealed class AgentService : IDisposable
         _agentDir = Path.Combine(_baseDir, "Agent");
         _logDir = Path.Combine(_baseDir, "logs");
         _statePath = Path.Combine(_agentDir, "agent_state.json");
-        _configPath = Path.Combine(_agentDir, "agent.config.json");
+        _configPath = ResolveConfigPath();
 
         Directory.CreateDirectory(_agentDir);
         Directory.CreateDirectory(_logDir);
+        Directory.CreateDirectory(Path.GetDirectoryName(_configPath) ?? _agentDir);
 
         _logger = new AgentLogger(Path.Combine(_logDir, "agent.log"));
         _stateWriter = new AgentStateWriter(_statePath);
@@ -59,6 +60,7 @@ public sealed class AgentService : IDisposable
     {
         try
         {
+            _logger.Info($"Agent config path: {_configPath}");
             _config = LoadConfig();
             _state = new AgentState
             {
@@ -130,6 +132,12 @@ public sealed class AgentService : IDisposable
             _logger.Error($"Failed to load config: {ex.Message}");
             throw;
         }
+    }
+
+    private static string ResolveConfigPath()
+    {
+        var baseDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DadBoard", "Agent");
+        return Path.Combine(baseDir, "agent.config.json");
     }
 
     private void SaveConfig(AgentConfig config)

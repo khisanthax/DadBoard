@@ -73,7 +73,7 @@ static class Installer
         logger.Info("Installer elevated.");
         logger.Info($"Installer parent pid: {(installerParentPid.HasValue ? installerParentPid.Value.ToString() : "unknown")}");
 
-        AgentConfig? agentConfig = null;
+        var agentConfig = new AgentConfig();
         if (!RunStep(tracker, logger, InstallSteps.CopyExe, "Copying DadBoard.exe", () =>
         {
             StopOtherInstances(logger, installerParentPid);
@@ -84,7 +84,7 @@ static class Installer
         }
 
         if (!RunStep(tracker, logger, InstallSteps.CreateData, "Creating ProgramData folders/configs", () =>
-            agentConfig = EnsureDataDirsAndConfigs(logger)))
+            EnsureDataDirsAndConfigs(logger)))
         {
             return false;
         }
@@ -97,11 +97,6 @@ static class Installer
 
         if (addFirewall)
         {
-            if (agentConfig == null)
-            {
-                agentConfig = LoadExistingConfig(GetProgramDataBaseDir()) ?? new AgentConfig();
-            }
-
             if (!RunStep(tracker, logger, InstallSteps.Firewall, "Adding firewall rules", () =>
                 AddFirewallRules(agentConfig.UdpPort, agentConfig.WsPort)))
             {
@@ -206,7 +201,7 @@ static class Installer
         }
     }
 
-    private static AgentConfig EnsureDataDirsAndConfigs(InstallLogger logger)
+    private static void EnsureDataDirsAndConfigs(InstallLogger logger)
     {
         var baseDir = GetProgramDataBaseDir();
         Directory.CreateDirectory(baseDir);
@@ -216,16 +211,8 @@ static class Installer
         Directory.CreateDirectory(Path.Combine(baseDir, "diag"));
         ApplyProgramDataAcl(baseDir, logger);
 
-        var config = LoadExistingConfig(baseDir) ?? new AgentConfig
-        {
-            PcId = Guid.NewGuid().ToString("N"),
-            DisplayName = Environment.MachineName
-        };
-
-        SaveAgentConfig(Path.Combine(baseDir, "Agent", "agent.config.json"), config);
         EnsureLeaderConfig(Path.Combine(baseDir, "Leader", "leader.config.json"));
         ApplyProgramDataAcl(baseDir, logger);
-        return config;
     }
 
     private static string GetProgramDataBaseDir()
@@ -243,41 +230,6 @@ static class Installer
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "DadBoard");
         return Path.Combine(tempDir, $"install_status_{timestamp:yyyyMMdd_HHmmss}.json");
-    }
-
-    private static AgentConfig? LoadExistingConfig(string baseDir)
-    {
-        var programDataConfig = Path.Combine(baseDir, "Agent", "agent.config.json");
-        var localConfig = Path.Combine(AppContext.BaseDirectory, "Agent", "agent.config.json");
-
-        foreach (var path in new[] { programDataConfig, localConfig })
-        {
-            if (!File.Exists(path))
-            {
-                continue;
-            }
-
-            try
-            {
-                var json = File.ReadAllText(path);
-                var config = JsonSerializer.Deserialize<AgentConfig>(json, JsonUtil.Options);
-                if (config != null)
-                {
-                    return config;
-                }
-            }
-            catch
-            {
-            }
-        }
-
-        return null;
-    }
-
-    private static void SaveAgentConfig(string path, AgentConfig config)
-    {
-        var json = JsonSerializer.Serialize(config, JsonUtil.Options);
-        File.WriteAllText(path, json);
     }
 
     private static void EnsureLeaderConfig(string path)

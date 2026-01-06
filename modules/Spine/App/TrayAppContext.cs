@@ -38,7 +38,11 @@ sealed class TrayAppContext : ApplicationContext
         _options = options;
         _uiContext = SynchronizationContext.Current ?? new SynchronizationContext();
         _baseDir = DataPaths.ResolveBaseDir();
-        _agentConfigPath = Path.Combine(_baseDir, "Agent", "agent.config.json");
+        _agentConfigPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "DadBoard",
+            "Agent",
+            "agent.config.json");
         _configStore = new AppConfigStore(_agentConfigPath);
 
         _agent = new AgentService(_baseDir);

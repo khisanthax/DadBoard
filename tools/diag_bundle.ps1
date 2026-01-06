@@ -76,11 +76,11 @@ try {
 } catch { }
 
 Write-Section "Config Snapshot"
-$agentConfig = Join-Path $agentDir "agent.config.json"
+$agentConfigLocal = Join-Path $env:LOCALAPPDATA "DadBoard\\Agent\\agent.config.json"
 $leaderConfig = Join-Path $leaderDir "leader.config.json"
-if (Test-Path -Path $agentConfig) {
-    Write-Line "agent.config.json:"
-    Get-Content -Path $agentConfig | Tee-Object -FilePath $outPath -Append
+if (Test-Path -Path $agentConfigLocal) {
+    Write-Line "agent.config.json (LocalAppData):"
+    Get-Content -Path $agentConfigLocal | Tee-Object -FilePath $outPath -Append
 }
 if (Test-Path -Path $leaderConfig) {
     Write-Line "leader.config.json:"
