@@ -15,9 +15,12 @@ sealed class InstallProgressForm : Form
     private readonly bool _addFirewall;
     private readonly Dictionary<string, ListViewItem> _stepItems = new(StringComparer.OrdinalIgnoreCase);
     private readonly System.Windows.Forms.Timer _timer = new();
+    private readonly System.Windows.Forms.Timer _autoCloseTimer = new();
+    private readonly int _autoCloseSeconds = 5;
 
     private readonly Label _titleLabel = new();
     private readonly ProgressBar _progress = new();
+    private readonly Label _summaryLabel = new();
     private readonly ListView _stepsView = new();
     private readonly TextBox _logBox = new();
     private readonly Button _launchButton = new();
@@ -30,7 +33,9 @@ sealed class InstallProgressForm : Form
     private bool _handledExit;
     private bool _installFinished;
     private string? _failureMessage;
-    private bool _exitLogged;
+    private bool _userInteracted;
+    private DateTime? _autoCloseDeadline;
+    private bool _finalLogged;
 
     public InstallProgressForm(bool addFirewall)
     {
@@ -39,7 +44,7 @@ sealed class InstallProgressForm : Form
         _snapshot = InstallStatusFactory.CreateDefault();
 
         Text = "DadBoard Installer";
-        Size = new Size(780, 620);
+        Size = new Size(780, 640);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
@@ -53,6 +58,9 @@ sealed class InstallProgressForm : Form
         _progress.Style = ProgressBarStyle.Marquee;
         _progress.MarqueeAnimationSpeed = 30;
 
+        _summaryLabel.AutoSize = true;
+        _summaryLabel.Text = "";
+
         ConfigureStepsView();
         ConfigureLogBox();
         ConfigureButtons();
@@ -61,25 +69,32 @@ sealed class InstallProgressForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 5,
+            RowCount = 6,
             Padding = new Padding(12)
         };
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 40));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 60));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 35));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 65));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         layout.Controls.Add(_titleLabel, 0, 0);
         layout.Controls.Add(_progress, 0, 1);
-        layout.Controls.Add(_stepsView, 0, 2);
-        layout.Controls.Add(_logBox, 0, 3);
-        layout.Controls.Add(CreateButtonsPanel(), 0, 4);
+        layout.Controls.Add(_summaryLabel, 0, 2);
+        layout.Controls.Add(_stepsView, 0, 3);
+        layout.Controls.Add(_logBox, 0, 4);
+        layout.Controls.Add(CreateButtonsPanel(), 0, 5);
 
         Controls.Add(layout);
 
         _timer.Interval = 500;
         _timer.Tick += (_, _) => RefreshStatus();
+
+        _autoCloseTimer.Interval = 250;
+        _autoCloseTimer.Tick += (_, _) => AutoCloseTick();
+
+        WireInteractionHandlers(this);
     }
 
     public bool InstallSucceeded => _installFinished && _snapshot.Success;
@@ -120,20 +135,36 @@ sealed class InstallProgressForm : Form
 
     private void ConfigureButtons()
     {
-        _launchButton.Text = "Launch DadBoard";
+        _launchButton.Text = "Open DadBoard";
         _launchButton.Enabled = false;
-        _launchButton.Click += (_, _) => LaunchInstalledCopy(force: true);
+        _launchButton.Click += (_, _) =>
+        {
+            MarkUserInteraction();
+            OpenInstalledCopy();
+        };
 
-        _openLogButton.Text = "Open install log";
-        _openLogButton.Enabled = true;
-        _openLogButton.Click += (_, _) => OpenLog();
+        _openLogButton.Text = "Open log folder";
+        _openLogButton.Enabled = false;
+        _openLogButton.Click += (_, _) =>
+        {
+            MarkUserInteraction();
+            OpenLogFolder();
+        };
 
         _copyErrorButton.Text = "Copy error details";
         _copyErrorButton.Enabled = false;
-        _copyErrorButton.Click += (_, _) => CopyErrorDetails();
+        _copyErrorButton.Click += (_, _) =>
+        {
+            MarkUserInteraction();
+            CopyErrorDetails();
+        };
 
         _closeButton.Text = "Close";
-        _closeButton.Click += (_, _) => Close();
+        _closeButton.Click += (_, _) =>
+        {
+            MarkUserInteraction();
+            Close();
+        };
     }
 
     private Control CreateButtonsPanel()
@@ -287,11 +318,7 @@ sealed class InstallProgressForm : Form
             return;
         }
 
-        _snapshot.Completed = true;
-        _snapshot.Success = true;
-        _snapshot.ErrorMessage = null;
-        InstallStatusIo.Write(_session.StatusPath, _snapshot);
-        CloseAfterSuccess();
+        SetSuccessState();
     }
 
     private bool LaunchInstalledCopy(bool force)
@@ -355,14 +382,7 @@ sealed class InstallProgressForm : Form
             InstallStatusIo.Write(_session.StatusPath, _snapshot);
             TryLog("Installed copy confirmed.");
             LaunchedInstalledCopy = true;
-            if (!_snapshot.Completed)
-            {
-                _snapshot.Completed = true;
-                _snapshot.Success = true;
-                _snapshot.ErrorMessage = null;
-                InstallStatusIo.Write(_session.StatusPath, _snapshot);
-            }
-            CloseAfterSuccess();
+            SetSuccessState();
             return true;
         }
         catch (Exception ex)
@@ -426,11 +446,14 @@ sealed class InstallProgressForm : Form
     {
         if (_snapshot.Success)
         {
-            _titleLabel.Text = "Install complete.";
+            _titleLabel.Text = "✅ Install complete";
             _progress.Style = ProgressBarStyle.Continuous;
             _progress.Value = 100;
             _launchButton.Enabled = true;
+            _openLogButton.Enabled = true;
             _copyErrorButton.Enabled = false;
+            _summaryLabel.Text = BuildSuccessSummary();
+            StartAutoClose();
         }
         else
         {
@@ -438,26 +461,25 @@ sealed class InstallProgressForm : Form
             _progress.Style = ProgressBarStyle.Continuous;
             _progress.Value = 0;
             _copyErrorButton.Enabled = true;
+            _openLogButton.Enabled = true;
+            _summaryLabel.Text = _snapshot.ErrorMessage ?? "Install did not complete.";
         }
 
         UpdateLog();
-        if (_snapshot.Success)
-        {
-            CloseAfterSuccess();
-        }
     }
 
-    private void OpenLog()
+    private void OpenLogFolder()
     {
         try
         {
-            if (!File.Exists(_session.LogPath))
+            var folder = Path.GetDirectoryName(_session.LogPath);
+            if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
             {
-                MessageBox.Show("Install log not found yet.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show("Log folder not found yet.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
-            Process.Start(new ProcessStartInfo(_session.LogPath) { UseShellExecute = true });
+            Process.Start(new ProcessStartInfo("explorer.exe", $"\"{folder}\"") { UseShellExecute = true });
         }
         catch
         {
@@ -477,16 +499,112 @@ sealed class InstallProgressForm : Form
         }
     }
 
-    private void CloseAfterSuccess()
+    private void SetSuccessState()
     {
-        if (_exitLogged)
+        if (!_snapshot.Completed)
         {
-            Close();
+            _snapshot.Completed = true;
+            _snapshot.Success = true;
+            _snapshot.ErrorMessage = null;
+            InstallStatusIo.Write(_session.StatusPath, _snapshot);
+        }
+
+        if (!_installFinished)
+        {
+            _installFinished = true;
+            _timer.Stop();
+        }
+
+        UpdateFinalUi();
+    }
+
+    private void StartAutoClose()
+    {
+        if (_userInteracted)
+        {
             return;
         }
 
-        _exitLogged = true;
-        TryLog("Installer exiting.");
-        Close();
+        _autoCloseDeadline = DateTime.UtcNow.AddSeconds(_autoCloseSeconds);
+        _autoCloseTimer.Start();
+    }
+
+    private void AutoCloseTick()
+    {
+        if (_userInteracted)
+        {
+            _autoCloseTimer.Stop();
+            return;
+        }
+
+        if (_autoCloseDeadline.HasValue && DateTime.UtcNow >= _autoCloseDeadline.Value)
+        {
+            _autoCloseTimer.Stop();
+            LogFinalIfNeeded();
+            Close();
+        }
+    }
+
+    private void MarkUserInteraction()
+    {
+        _userInteracted = true;
+        if (_autoCloseTimer.Enabled)
+        {
+            _autoCloseTimer.Stop();
+        }
+    }
+
+    private void WireInteractionHandlers(Control control)
+    {
+        control.MouseDown += (_, _) => MarkUserInteraction();
+        control.KeyDown += (_, _) => MarkUserInteraction();
+
+        foreach (Control child in control.Controls)
+        {
+            WireInteractionHandlers(child);
+        }
+    }
+
+    private void LogFinalIfNeeded()
+    {
+        if (_finalLogged || !_snapshot.Success)
+        {
+            return;
+        }
+
+        _finalLogged = true;
+        TryLog("Install complete (UI confirmed).");
+    }
+
+    private string BuildSuccessSummary()
+    {
+        var lines = _snapshot.Steps
+            .Select(step => $"{step.Name}: {step.Status}")
+            .ToArray();
+        return $"Completed steps: {string.Join(" | ", lines)}";
+    }
+
+    private void OpenInstalledCopy()
+    {
+        try
+        {
+            var installedExe = Installer.GetInstalledExePath();
+            if (!File.Exists(installedExe))
+            {
+                MessageBox.Show("Installed DadBoard.exe not found.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            Process.Start(new ProcessStartInfo(installedExe) { UseShellExecute = true });
+        }
+        catch
+        {
+        }
+    }
+
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        LogFinalIfNeeded();
+        base.OnFormClosing(e);
     }
 }
