@@ -9,6 +9,7 @@ public static class ProtocolConstants
 
     public const string TypeAgentHello = "AgentHello";
     public const string TypeCommandLaunchGame = "Command.LaunchGame";
+    public const string TypeCommandLaunchExe = "Command.LaunchExe";
     public const string TypeAck = "Ack";
     public const string TypeStatus = "Status";
 }
@@ -48,6 +49,11 @@ public sealed class LaunchGameCommand
     public string? ExePath { get; set; }
     public string[]? ProcessNames { get; set; }
     public int ReadyTimeoutSec { get; set; } = 120;
+}
+
+public sealed class LaunchExeCommand
+{
+    public string? ExePath { get; set; }
 }
 
 public sealed class AckPayload

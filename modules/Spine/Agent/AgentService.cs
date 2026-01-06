@@ -252,6 +252,23 @@ public sealed class AgentService : IDisposable
             return;
         }
 
+        if (envelope.Type == ProtocolConstants.TypeCommandLaunchExe)
+        {
+            var command = envelope.Payload.Deserialize<LaunchExeCommand>(JsonUtil.Options);
+            if (command == null)
+            {
+                SendAck(socket, envelope.CorrelationId, ok: false, "Invalid payload");
+                return;
+            }
+
+            _state.LastCommandId = envelope.CorrelationId;
+            _state.LastCommandType = envelope.Type;
+            _state.LastCommandTs = DateTime.UtcNow.ToString("O");
+
+            _ = Task.Run(() => ExecuteLaunchExe(envelope.CorrelationId, command, socket));
+            return;
+        }
+
         SendAck(socket, envelope.CorrelationId, ok: false, "Unknown command");
     }
 
@@ -291,6 +308,30 @@ public sealed class AgentService : IDisposable
         catch (Exception ex)
         {
             SendStatus(correlationId, "failed", command.GameId, ex.Message);
+        }
+    }
+
+    private async Task ExecuteLaunchExe(string correlationId, LaunchExeCommand command, WebSocket socket)
+    {
+        SendStatus(correlationId, "received", null, "Command received.");
+        SendAck(socket, correlationId, ok: true, null);
+
+        try
+        {
+            if (string.IsNullOrWhiteSpace(command.ExePath))
+            {
+                SendStatus(correlationId, "failed", null, "No exePath provided.");
+                return;
+            }
+
+            SendStatus(correlationId, "launching", null, $"Launching {command.ExePath}.");
+            Process.Start(new ProcessStartInfo(command.ExePath) { UseShellExecute = true });
+            await Task.Delay(500, _cts.Token).ConfigureAwait(false);
+            SendStatus(correlationId, "running", null, "Process started.");
+        }
+        catch (Exception ex)
+        {
+            SendStatus(correlationId, "failed", null, ex.Message);
         }
     }
 

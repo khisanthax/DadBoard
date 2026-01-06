@@ -113,6 +113,25 @@ public sealed class LeaderService : IDisposable
         }
     }
 
+    public bool SendTestCommand(string pcId, out string? error)
+    {
+        error = null;
+        if (!_agents.TryGetValue(pcId, out var agent))
+        {
+            error = "Agent not found.";
+            return false;
+        }
+
+        if (!agent.Online)
+        {
+            error = "Agent is offline.";
+            return false;
+        }
+
+        _ = Task.Run(() => SendLaunchExe(agent, "notepad.exe"));
+        return true;
+    }
+
     private LeaderConfig LoadConfig()
     {
         if (!File.Exists(_configPath))
@@ -237,6 +256,51 @@ public sealed class LeaderService : IDisposable
         agent.LastCommandTs = DateTime.UtcNow;
         agent.LastStatus = "sent";
         agent.LastStatusMessage = $"Sent {game.Name}";
+        StartTimeout(agent.PcId, correlationId);
+
+        try
+        {
+            await connection.Socket.SendAsync(buffer, WebSocketMessageType.Text, true, _cts.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            agent.LastStatus = "failed";
+            agent.LastStatusMessage = ex.Message;
+        }
+    }
+
+    private async Task SendLaunchExe(AgentInfo agent, string exePath)
+    {
+        var connection = await EnsureConnection(agent).ConfigureAwait(false);
+        if (connection == null || connection.Socket.State != WebSocketState.Open)
+        {
+            agent.LastStatus = "ws_error";
+            agent.LastStatusMessage = connection?.LastError ?? "Unable to connect";
+            return;
+        }
+
+        var correlationId = Guid.NewGuid().ToString("N");
+        var payload = new LaunchExeCommand
+        {
+            ExePath = exePath
+        };
+
+        var envelope = new
+        {
+            type = ProtocolConstants.TypeCommandLaunchExe,
+            correlationId,
+            pcId = agent.PcId,
+            payload,
+            ts = DateTime.UtcNow.ToString("O")
+        };
+
+        var json = JsonSerializer.Serialize(envelope, JsonUtil.Options);
+        var buffer = Encoding.UTF8.GetBytes(json);
+
+        agent.LastCommandId = correlationId;
+        agent.LastCommandTs = DateTime.UtcNow;
+        agent.LastStatus = "sent";
+        agent.LastStatusMessage = $"Sent {exePath}";
         StartTimeout(agent.PcId, correlationId);
 
         try

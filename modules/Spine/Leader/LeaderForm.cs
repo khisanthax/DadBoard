@@ -57,11 +57,12 @@ public sealed class LeaderForm : Form
         var panel = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            RowCount = 3,
+            RowCount = 4,
             ColumnCount = 1
         };
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         panel.Controls.Add(new Label { Text = "Games", AutoSize = true }, 0, 0);
@@ -78,6 +79,10 @@ public sealed class LeaderForm : Form
         button.Click += (_, _) => LaunchSelected();
         panel.Controls.Add(button, 0, 2);
 
+        var testButton = new Button { Text = "Test: Open Notepad", Dock = DockStyle.Top, Height = 32 };
+        testButton.Click += (_, _) => SendTestCommand();
+        panel.Controls.Add(testButton, 0, 3);
+
         return panel;
     }
 
@@ -89,6 +94,8 @@ public sealed class LeaderForm : Form
         _grid.AllowUserToDeleteRows = false;
         _grid.RowHeadersVisible = false;
         _grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+        _grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+        _grid.MultiSelect = false;
 
         EnsureGridColumns();
 
@@ -119,6 +126,7 @@ public sealed class LeaderForm : Form
         foreach (var agent in snapshot)
         {
             _grid.Rows.Add(
+                agent.PcId,
                 agent.Name,
                 agent.Ip,
                 agent.Online ? "Yes" : "No",
@@ -138,6 +146,8 @@ public sealed class LeaderForm : Form
             return;
         }
 
+        var pcIdCol = _grid.Columns.Add("pcId", "PC Id");
+        _grid.Columns[pcIdCol].Visible = false;
         _grid.Columns.Add("name", "PC");
         _grid.Columns.Add("ip", "IP");
         _grid.Columns.Add("online", "Online");
@@ -156,6 +166,35 @@ public sealed class LeaderForm : Form
 
         _service.LaunchOnAll(game);
         _statusLabel.Text = $"Launch triggered: {game.Name}";
+    }
+
+    private void SendTestCommand()
+    {
+        var pcId = GetSelectedAgentPcId();
+        if (string.IsNullOrWhiteSpace(pcId))
+        {
+            MessageBox.Show("Select an agent row first.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        if (!_service.SendTestCommand(pcId, out var error))
+        {
+            MessageBox.Show(error ?? "Unable to send test command.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        _statusLabel.Text = "Sent test command: notepad.exe";
+    }
+
+    private string? GetSelectedAgentPcId()
+    {
+        if (_grid.SelectedRows.Count == 0)
+        {
+            return null;
+        }
+
+        var row = _grid.SelectedRows[0];
+        return row.Cells["pcId"].Value?.ToString();
     }
 
     public void AllowClose()
