@@ -24,6 +24,7 @@ sealed class TrayAppContext : ApplicationContext
     private readonly ToolStripMenuItem _enableLeaderItem;
     private readonly ToolStripMenuItem _disableLeaderItem;
     private readonly ToolStripMenuItem _startLeaderOnLoginItem;
+    private readonly ToolStripMenuItem _installItem;
     private readonly ToolStripMenuItem _statusItem;
 
     private AgentConfig _config;
@@ -31,11 +32,11 @@ sealed class TrayAppContext : ApplicationContext
 
     public TrayAppContext(string[] args)
     {
-        _baseDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DadBoard");
+        _baseDir = DataPaths.ResolveBaseDir();
         _agentConfigPath = Path.Combine(_baseDir, "Agent", "agent.config.json");
         _configStore = new AppConfigStore(_agentConfigPath);
 
-        _agent = new AgentService();
+        _agent = new AgentService(_baseDir);
         _agent.Start();
 
         _config = _configStore.Load();
@@ -46,6 +47,7 @@ sealed class TrayAppContext : ApplicationContext
         _startLeaderOnLoginItem.Checked = _config.StartLeaderOnLogin;
         _startLeaderOnLoginItem.CheckedChanged += (_, _) => ToggleStartLeaderOnLogin();
 
+        _installItem = new ToolStripMenuItem("Install (Admin)", null, (_, _) => Install());
         _statusItem = new ToolStripMenuItem("Show Status", null, (_, _) => ShowStatus());
 
         var menu = new ContextMenuStrip();
@@ -55,6 +57,7 @@ sealed class TrayAppContext : ApplicationContext
             _disableLeaderItem,
             new ToolStripSeparator(),
             _startLeaderOnLoginItem,
+            _installItem,
             _statusItem,
             new ToolStripSeparator(),
             new ToolStripMenuItem("Exit", null, (_, _) => Exit())
@@ -92,7 +95,7 @@ sealed class TrayAppContext : ApplicationContext
             return;
         }
 
-        _leader = new LeaderService();
+        _leader = new LeaderService(_baseDir);
         if (showUI)
         {
             ShowLeaderUI();
@@ -153,11 +156,33 @@ sealed class TrayAppContext : ApplicationContext
         _configStore.Save(_config);
     }
 
+    private void Install()
+    {
+        var result = MessageBox.Show(
+            "Install DadBoard for this PC? This requires admin approval.",
+            "DadBoard",
+            MessageBoxButtons.OKCancel,
+            MessageBoxIcon.Question);
+
+        if (result != DialogResult.OK)
+        {
+            return;
+        }
+
+        if (Installer.RequestElevation(addFirewall: false))
+        {
+            Exit();
+        }
+    }
+
     private void UpdateMenuState()
     {
         var leaderEnabled = _leader != null;
         _enableLeaderItem.Enabled = !leaderEnabled;
         _disableLeaderItem.Enabled = leaderEnabled;
+        var installed = Installer.IsInstalled();
+        _installItem.Text = installed ? "Reinstall (Admin)" : "Install (Admin)";
+        _installItem.Enabled = true;
     }
 
     private void Exit()

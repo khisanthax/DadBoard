@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using System.Linq;
 using System.Windows.Forms;
 
 namespace DadBoard.App;
@@ -11,6 +12,18 @@ static class Program
     {
         try
         {
+            if (args.Any(arg => string.Equals(arg, "--install", StringComparison.OrdinalIgnoreCase)))
+            {
+                Installer.RequestElevation(addFirewall: args.Any(a => string.Equals(a, "--add-firewall", StringComparison.OrdinalIgnoreCase)));
+                return;
+            }
+
+            if (args.Any(arg => string.Equals(arg, "--install-elevated", StringComparison.OrdinalIgnoreCase)))
+            {
+                Installer.PerformInstall(addFirewall: args.Any(a => string.Equals(a, "--add-firewall", StringComparison.OrdinalIgnoreCase)));
+                return;
+            }
+
             ApplicationConfiguration.Initialize();
             using var context = new TrayAppContext(args);
             Application.Run(context);

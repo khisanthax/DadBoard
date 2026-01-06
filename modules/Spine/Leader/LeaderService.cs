@@ -40,9 +40,9 @@ public sealed class LeaderService : IDisposable
     private Timer? _persistTimer;
     private Timer? _stateTimer;
 
-    public LeaderService()
+    public LeaderService(string? baseDir = null)
     {
-        _baseDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DadBoard");
+        _baseDir = baseDir ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DadBoard");
         _leaderDir = Path.Combine(_baseDir, "Leader");
         _logDir = Path.Combine(_baseDir, "logs");
         _configPath = Path.Combine(_leaderDir, "leader.config.json");

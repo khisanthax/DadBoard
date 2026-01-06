@@ -11,14 +11,15 @@ dotnet publish -c Release -r win-x64 /p:PublishSingleFile=true /p:SelfContained=
 ```
 
 ## Install DadBoard (each PC)
-Copy the repo folder (or just the published output) to the target PC and run:
+Copy `DadBoard.exe` from the publish folder to the target PC and run:
 
 ```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\Setup-DadBoard.ps1 -CreateLeaderShortcut
+.\DadBoard.exe --install
 ```
 
-This installs `DadBoard.exe` to `C:\Program Files\DadBoard\`, writes `agent.config.json` and `leader.config.json` under `C:\ProgramData\DadBoard\`, and creates a scheduled task `DadBoard` at logon. The optional Start Menu shortcut `DadBoard Leader` launches the app with leader enabled.
+The installer prompts for admin rights, then installs `DadBoard.exe` to `C:\Program Files\DadBoard\`, writes `agent.config.json` and `leader.config.json` under `C:\ProgramData\DadBoard\`, and creates a scheduled task `DadBoard` at logon. After install it relaunches normally.
+
+Optional (legacy): `Setup-DadBoard.ps1` is still available if you prefer a PowerShell installer.
 
 ## Verify running
 - Agent log: `C:\ProgramData\DadBoard\logs\agent.log`

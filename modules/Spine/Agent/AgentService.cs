@@ -39,9 +39,9 @@ public sealed class AgentService : IDisposable
     private DateTime _lastHello;
     private AgentState _state = new();
 
-    public AgentService()
+    public AgentService(string? baseDir = null)
     {
-        _baseDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DadBoard");
+        _baseDir = baseDir ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DadBoard");
         _agentDir = Path.Combine(_baseDir, "Agent");
         _logDir = Path.Combine(_baseDir, "logs");
         _statePath = Path.Combine(_agentDir, "agent_state.json");
