@@ -224,6 +224,7 @@ static class Installer
 
         SaveAgentConfig(Path.Combine(baseDir, "Agent", "agent.config.json"), config);
         EnsureLeaderConfig(Path.Combine(baseDir, "Leader", "leader.config.json"));
+        ApplyProgramDataAcl(baseDir, logger);
         return config;
     }
 
@@ -369,7 +370,7 @@ static class Installer
         try
         {
             logger.Info("Applying ProgramData ACLs via icacls.");
-            var args = $"\"{baseDir}\" /grant Users:(OI)(CI)M /T";
+            var args = $"\"{baseDir}\" /inheritance:e /grant *S-1-5-32-545:(OI)(CI)M /grant *S-1-5-32-544:(OI)(CI)F /T";
             var start = new ProcessStartInfo("icacls", args)
             {
                 UseShellExecute = false,
@@ -387,6 +388,16 @@ static class Installer
             var output = proc.StandardOutput.ReadToEnd();
             var error = proc.StandardError.ReadToEnd();
             proc.WaitForExit();
+
+            if (!string.IsNullOrWhiteSpace(output))
+            {
+                logger.Info($"icacls output: {output.Trim()}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(error))
+            {
+                logger.Error($"icacls error: {error.Trim()}");
+            }
 
             if (proc.ExitCode != 0)
             {
