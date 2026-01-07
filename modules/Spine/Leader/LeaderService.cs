@@ -39,10 +39,13 @@ public sealed class LeaderService : IDisposable
     private readonly ConcurrentDictionary<string, AgentConnection> _connections = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, Timer> _commandTimeouts = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, GameInventory> _agentInventories = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, string> _agentInventoryErrors = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _inventoryLock = new();
     private List<SteamGameEntry> _leaderCatalog = new();
+    private readonly Dictionary<int, SteamGameEntry> _leaderCatalogMap = new();
     private DateTime _leaderCatalogTs;
     private readonly ConcurrentDictionary<string, DateTime> _lastInventoryScan = new(StringComparer.OrdinalIgnoreCase);
+    private DateTime _lastInventoryRefresh;
 
     private readonly CancellationTokenSource _cts = new();
     private UdpClient? _udp;
@@ -100,9 +103,16 @@ public sealed class LeaderService : IDisposable
         }
     }
 
+    public DateTime GetLastInventoryRefreshUtc() => _lastInventoryRefresh;
+
     public IReadOnlyDictionary<string, GameInventory> GetAgentInventoriesSnapshot()
     {
         return _agentInventories.ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+    }
+
+    public IReadOnlyDictionary<string, string> GetAgentInventoryErrorsSnapshot()
+    {
+        return _agentInventoryErrors.ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
     }
 
     public void RefreshSteamInventory()
@@ -110,9 +120,32 @@ public sealed class LeaderService : IDisposable
         var scan = SteamLibraryScanner.ScanInstalledGames();
         lock (_inventoryLock)
         {
-            _leaderCatalog = scan.Games.OrderBy(g => g.Name, StringComparer.OrdinalIgnoreCase).ToList();
+            _leaderCatalogMap.Clear();
+            foreach (var entry in scan.Games)
+            {
+                if (entry.AppId <= 0)
+                {
+                    continue;
+                }
+
+                _leaderCatalogMap[entry.AppId] = new SteamGameEntry
+                {
+                    AppId = entry.AppId,
+                    Name = entry.Name
+                };
+            }
+
+            foreach (var inventory in _agentInventories.Values)
+            {
+                MergeInventoryIntoCatalog(inventory);
+            }
+
+            _leaderCatalog = _leaderCatalogMap.Values
+                .OrderBy(g => g.Name ?? $"App {g.AppId}", StringComparer.OrdinalIgnoreCase)
+                .ToList();
             _leaderCatalogTs = DateTime.UtcNow;
         }
+        _lastInventoryRefresh = DateTime.UtcNow;
         SaveLeaderInventoryCache();
         InventoriesUpdated?.Invoke();
 
@@ -809,6 +842,24 @@ public sealed class LeaderService : IDisposable
                 }
 
                 _agentInventories[inventory.PcId] = inventory;
+                if (!string.IsNullOrWhiteSpace(inventory.Error))
+                {
+                    _agentInventoryErrors[inventory.PcId] = inventory.Error!;
+                    _logger.Warn($"Inventory scan error for {inventory.PcId}: {inventory.Error}");
+                }
+                else
+                {
+                    _agentInventoryErrors.TryRemove(inventory.PcId, out _);
+                }
+
+                lock (_inventoryLock)
+                {
+                    MergeInventoryIntoCatalog(inventory);
+                    _leaderCatalog = _leaderCatalogMap.Values
+                        .OrderBy(g => g.Name ?? $"App {g.AppId}", StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+                }
+
                 SaveAgentInventoriesCache();
                 InventoriesUpdated?.Invoke();
             }
@@ -867,6 +918,25 @@ public sealed class LeaderService : IDisposable
         }
     }
 
+    private void MergeInventoryIntoCatalog(GameInventory inventory)
+    {
+        foreach (var game in inventory.Games)
+        {
+            if (game.AppId <= 0)
+            {
+                continue;
+            }
+
+            if (_leaderCatalogMap.TryGetValue(game.AppId, out var existing))
+            {
+                if (string.IsNullOrWhiteSpace(existing.Name) && !string.IsNullOrWhiteSpace(game.Name))
+                {
+                    existing.Name = game.Name;
+                }
+            }
+        }
+    }
+
     private void LoadInventoryCaches()
     {
         try
@@ -878,6 +948,14 @@ public sealed class LeaderService : IDisposable
                 if (cache != null)
                 {
                     _leaderCatalog = cache.Games.ToList();
+                    _leaderCatalogMap.Clear();
+                    foreach (var entry in _leaderCatalog)
+                    {
+                        if (entry.AppId > 0)
+                        {
+                            _leaderCatalogMap[entry.AppId] = entry;
+                        }
+                    }
                     _leaderCatalogTs = DateTime.TryParse(cache.Ts, out var ts) ? ts : DateTime.MinValue;
                 }
             }

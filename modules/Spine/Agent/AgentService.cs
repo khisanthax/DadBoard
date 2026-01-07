@@ -343,9 +343,6 @@ public sealed class AgentService : IDisposable
 
     private Task ExecuteScanSteamGames(string correlationId, WebSocket socket)
     {
-        SendAck(socket, correlationId, ok: true, null);
-        _logger.Info($"ScanSteamGames ack sent corr={correlationId}.");
-
         try
         {
             var scan = SteamLibraryScanner.ScanInstalledGames();
@@ -354,17 +351,33 @@ public sealed class AgentService : IDisposable
                 PcId = _config.PcId,
                 MachineName = _config.DisplayName,
                 Games = scan.Games,
-                Ts = DateTime.UtcNow.ToString("O")
+                Ts = DateTime.UtcNow.ToString("O"),
+                Error = scan.Error,
+                SteamPath = scan.SteamPath,
+                LibraryPaths = scan.LibraryPaths,
+                ManifestCount = scan.ManifestCount
             };
+
+            var libs = inventory.LibraryPaths?.Length ?? 0;
+            _logger.Info($"ScanSteamGames steamPath={inventory.SteamPath ?? "none"} libs={libs} manifests={inventory.ManifestCount} games={inventory.Games.Length}");
 
             SendEnvelope(socket, ProtocolConstants.TypeSteamInventory, correlationId, inventory);
             _logger.Info($"ScanSteamGames sent {inventory.Games.Length} games corr={correlationId}.");
+
+            if (!string.IsNullOrWhiteSpace(inventory.Error))
+            {
+                _logger.Warn($"ScanSteamGames error corr={correlationId}: {inventory.Error}");
+            }
         }
         catch (Exception ex)
         {
             _logger.Error($"ScanSteamGames failed corr={correlationId}: {ex.Message}");
             SendAck(socket, correlationId, ok: false, ex.Message);
+            return Task.CompletedTask;
         }
+
+        SendAck(socket, correlationId, ok: true, null);
+        _logger.Info($"ScanSteamGames ack sent corr={correlationId}.");
 
         return Task.CompletedTask;
     }

@@ -104,6 +104,53 @@ if (Test-Path -Path $agentState) {
     Get-Content -Path $agentState | Tee-Object -FilePath $outPath -Append
 }
 
+Write-Section "Inventory Snapshot"
+$leaderInventory = Join-Path $env:LOCALAPPDATA "DadBoard\\Leader\\leader_inventory.json"
+$agentInventories = Join-Path $env:LOCALAPPDATA "DadBoard\\Leader\\agent_inventories.json"
+if (Test-Path -Path $leaderInventory) {
+    try {
+        $leaderData = Get-Content -Path $leaderInventory -Raw | ConvertFrom-Json
+        $leaderCount = if ($leaderData.games) { $leaderData.games.Count } else { 0 }
+        Write-Line ("Leader catalog count: {0}" -f $leaderCount)
+        Write-Line ("Leader catalog timestamp: {0}" -f $leaderData.ts)
+    } catch {
+        Write-Line ("Leader inventory parse failed: {0}" -f $_.Exception.Message)
+    }
+} else {
+    Write-Line "Leader inventory cache not found."
+}
+
+if (Test-Path -Path $agentInventories) {
+    try {
+        $agentData = Get-Content -Path $agentInventories -Raw | ConvertFrom-Json
+        if ($agentData.inventories) {
+            foreach ($inv in $agentData.inventories) {
+                $count = if ($inv.games) { $inv.games.Count } else { 0 }
+                $sample = @()
+                if ($inv.games) {
+                    $sample = $inv.games | Select-Object -First 10 | ForEach-Object { $_.appId }
+                }
+                Write-Line ("Agent {0} ({1}) games: {2}" -f $inv.pcId, $inv.machineName, $count)
+                if ($sample.Count -gt 0) {
+                    Write-Line ("Agent {0} sample appIds: {1}" -f $inv.pcId, ($sample -join ", "))
+                }
+                if ($inv.error) {
+                    Write-Line ("Agent {0} error: {1}" -f $inv.pcId, $inv.error)
+                }
+                if ($inv.ts) {
+                    Write-Line ("Agent {0} last scan: {1}" -f $inv.pcId, $inv.ts)
+                }
+            }
+        } else {
+            Write-Line "Agent inventories cache empty."
+        }
+    } catch {
+        Write-Line ("Agent inventories parse failed: {0}" -f $_.Exception.Message)
+    }
+} else {
+    Write-Line "Agent inventories cache not found."
+}
+
 Write-Section "WebSocket Health"
 if (Test-Path -Path $leaderState) {
     Write-Line "Leader WebSocket state is captured in leader_state.json."

@@ -11,6 +11,8 @@ public sealed class SteamScanResult
     public string? SteamPath { get; set; }
     public string[] LibraryPaths { get; set; } = Array.Empty<string>();
     public SteamGameEntry[] Games { get; set; } = Array.Empty<SteamGameEntry>();
+    public int ManifestCount { get; set; }
+    public string? Error { get; set; }
 }
 
 public static class SteamLibraryScanner
@@ -22,6 +24,17 @@ public static class SteamLibraryScanner
     public static SteamScanResult ScanInstalledGames()
     {
         var steamPath = FindSteamPath();
+        if (string.IsNullOrWhiteSpace(steamPath))
+        {
+            return new SteamScanResult
+            {
+                SteamPath = null,
+                LibraryPaths = Array.Empty<string>(),
+                Games = Array.Empty<SteamGameEntry>(),
+                ManifestCount = 0,
+                Error = "Steam path not found."
+            };
+        }
         var libraryPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (!string.IsNullOrWhiteSpace(steamPath) && Directory.Exists(steamPath))
         {
@@ -41,6 +54,7 @@ public static class SteamLibraryScanner
         }
 
         var games = new Dictionary<int, SteamGameEntry>();
+        var manifestCount = 0;
         foreach (var library in libraryPaths)
         {
             var steamApps = Path.Combine(library, "steamapps");
@@ -53,6 +67,7 @@ public static class SteamLibraryScanner
             {
                 foreach (var manifest in Directory.GetFiles(steamApps, "appmanifest_*.acf"))
                 {
+                    manifestCount++;
                     if (!TryParseManifest(manifest, out var appId, out var name))
                     {
                         continue;
@@ -79,7 +94,8 @@ public static class SteamLibraryScanner
         {
             SteamPath = steamPath,
             LibraryPaths = new List<string>(libraryPaths).ToArray(),
-            Games = new List<SteamGameEntry>(games.Values).ToArray()
+            Games = new List<SteamGameEntry>(games.Values).ToArray(),
+            ManifestCount = manifestCount
         };
     }
 

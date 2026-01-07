@@ -123,6 +123,10 @@ public sealed class GameInventory
     public string MachineName { get; set; } = "";
     public SteamGameEntry[] Games { get; set; } = Array.Empty<SteamGameEntry>();
     public string Ts { get; set; } = "";
+    public string? Error { get; set; }
+    public string? SteamPath { get; set; }
+    public string[]? LibraryPaths { get; set; }
+    public int ManifestCount { get; set; }
 }
 
 public sealed class KnownAgentRecord
