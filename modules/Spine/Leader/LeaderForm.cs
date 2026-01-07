@@ -53,6 +53,11 @@ public sealed class LeaderForm : Form
         Text = "DadBoard Leader (Phase 3)";
         Size = new Size(1120, 640);
         StartPosition = FormStartPosition.CenterScreen;
+        var appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+        if (appIcon != null)
+        {
+            Icon = appIcon;
+        }
 
         var layout = new TableLayoutPanel
         {

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="DadBoard icon">
+  <rect width="256" height="256" rx="28" fill="#1c2430"/>
+  <rect x="120" y="52" width="16" height="28" fill="#3fb0e5"/>
+  <rect x="176" y="120" width="28" height="16" fill="#3fb0e5"/>
+  <rect x="120" y="176" width="16" height="28" fill="#3fb0e5"/>
+  <rect x="52" y="120" width="28" height="16" fill="#3fb0e5"/>
+  <rect x="80" y="80" width="96" height="96" rx="12" fill="#3fb0e5"/>
+  <circle cx="128" cy="32" r="20" fill="#3fb0e5"/>
+  <circle cx="224" cy="128" r="20" fill="#3fb0e5"/>
+  <circle cx="128" cy="224" r="20" fill="#3fb0e5"/>
+  <circle cx="32" cy="128" r="20" fill="#3fb0e5"/>
+</svg>

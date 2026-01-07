@@ -12,6 +12,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>DadBoard</AssemblyName>
+    <ApplicationIcon>..\..\..\assets\icon\dadboard.ico</ApplicationIcon>
   </PropertyGroup>
 
 </Project>

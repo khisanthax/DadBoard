@@ -79,9 +79,10 @@ sealed class TrayAppContext : ApplicationContext
             new ToolStripMenuItem("Exit", null, (_, _) => Exit())
         });
 
+        var trayIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
         _tray = new NotifyIcon
         {
-            Icon = SystemIcons.Application,
+            Icon = trayIcon,
             Text = "DadBoard",
             Visible = true,
             ContextMenuStrip = menu
