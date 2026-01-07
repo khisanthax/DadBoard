@@ -50,6 +50,7 @@ sealed class TrayAppContext : ApplicationContext
         _configStore = new AppConfigStore(_agentConfigPath);
 
         _agent = new AgentService(_baseDir);
+        _agent.ShutdownRequested += () => _uiContext.Post(_ => Exit(), null);
         _agent.Start();
 
         _config = _configStore.Load();

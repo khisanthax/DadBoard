@@ -10,6 +10,7 @@ public static class ProtocolConstants
     public const string TypeAgentHello = "AgentHello";
     public const string TypeCommandLaunchGame = "Command.LaunchGame";
     public const string TypeCommandLaunchExe = "Command.LaunchExe";
+    public const string TypeCommandShutdownApp = "Command.ShutdownApp";
     public const string TypeAck = "Ack";
     public const string TypeStatus = "Status";
 }
@@ -54,6 +55,11 @@ public sealed class LaunchGameCommand
 public sealed class LaunchExeCommand
 {
     public string? ExePath { get; set; }
+}
+
+public sealed class ShutdownAppCommand
+{
+    public string? Reason { get; set; }
 }
 
 public sealed class AckPayload

@@ -152,6 +152,25 @@ public sealed class LeaderService : IDisposable
         return true;
     }
 
+    public bool SendShutdownCommand(string pcId, out string? error)
+    {
+        error = null;
+        if (!_agents.TryGetValue(pcId, out var agent))
+        {
+            error = "Agent not found.";
+            return false;
+        }
+
+        if (!agent.Online)
+        {
+            error = "Agent is offline.";
+            return false;
+        }
+
+        _ = Task.Run(() => SendShutdown(agent));
+        return true;
+    }
+
     private LeaderConfig LoadConfig()
     {
         if (!File.Exists(_configPath))
@@ -405,6 +424,52 @@ public sealed class LeaderService : IDisposable
         }, null, TimeSpan.FromSeconds(_config.CommandTimeoutSec), Timeout.InfiniteTimeSpan);
 
         _commandTimeouts[key] = timer;
+    }
+
+    private async Task SendShutdown(AgentInfo agent)
+    {
+        var connection = await EnsureConnection(agent).ConfigureAwait(false);
+        if (connection == null || connection.Socket.State != WebSocketState.Open)
+        {
+            agent.LastStatus = "ws_error";
+            agent.LastStatusMessage = connection?.LastError ?? "Unable to connect";
+            return;
+        }
+
+        var correlationId = Guid.NewGuid().ToString("N");
+        var payload = new ShutdownAppCommand
+        {
+            Reason = "Leader requested shutdown."
+        };
+
+        var envelope = new
+        {
+            type = ProtocolConstants.TypeCommandShutdownApp,
+            correlationId,
+            pcId = agent.PcId,
+            payload,
+            ts = DateTime.UtcNow.ToString("O")
+        };
+
+        var json = JsonSerializer.Serialize(envelope, JsonUtil.Options);
+        var buffer = Encoding.UTF8.GetBytes(json);
+
+        agent.LastCommandId = correlationId;
+        agent.LastCommandTs = DateTime.UtcNow;
+        agent.LastStatus = "sent";
+        agent.LastStatusMessage = "Sent shutdown command";
+        StartTimeout(agent.PcId, correlationId);
+        _logger.Info($"Sending ShutdownApp to pcId={agent.PcId} ip={agent.Ip} ws={agent.WsPort} corr={correlationId}");
+
+        try
+        {
+            await connection.Socket.SendAsync(buffer, WebSocketMessageType.Text, true, _cts.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            agent.LastStatus = "failed";
+            agent.LastStatusMessage = ex.Message;
+        }
     }
 
     private async Task<AgentConnection?> EnsureConnection(AgentInfo agent)

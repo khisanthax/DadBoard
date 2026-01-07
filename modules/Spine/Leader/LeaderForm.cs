@@ -17,6 +17,7 @@ public sealed class LeaderForm : Form
     private readonly EventHandler _refreshHandler;
     private readonly Button _testButton = new();
     private readonly Button _testMissingButton = new();
+    private readonly Button _shutdownButton = new();
     private bool _allowClose;
 
     public LeaderForm(LeaderService service)
@@ -59,11 +60,12 @@ public sealed class LeaderForm : Form
         var panel = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            RowCount = 5,
+            RowCount = 6,
             ColumnCount = 1
         };
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -95,6 +97,13 @@ public sealed class LeaderForm : Form
         _testMissingButton.Enabled = false;
         _testMissingButton.Click += (_, _) => SendMissingExeTest();
         panel.Controls.Add(_testMissingButton, 0, 4);
+
+        _shutdownButton.Text = "Close Remote DadBoard";
+        _shutdownButton.Dock = DockStyle.Top;
+        _shutdownButton.Height = 32;
+        _shutdownButton.Enabled = false;
+        _shutdownButton.Click += (_, _) => SendShutdownCommand();
+        panel.Controls.Add(_shutdownButton, 0, 5);
 
         return panel;
     }
@@ -252,6 +261,7 @@ public sealed class LeaderForm : Form
         {
             _testButton.Enabled = false;
             _testMissingButton.Enabled = false;
+            _shutdownButton.Enabled = false;
             return;
         }
 
@@ -261,12 +271,14 @@ public sealed class LeaderForm : Form
         {
             _testButton.Enabled = false;
             _testMissingButton.Enabled = false;
+            _shutdownButton.Enabled = false;
             return;
         }
 
         var enabled = !_service.IsLocalAgent(pcId, ip);
         _testButton.Enabled = enabled;
         _testMissingButton.Enabled = enabled;
+        _shutdownButton.Enabled = enabled;
     }
 
     private void SendMissingExeTest()
@@ -311,6 +323,31 @@ public sealed class LeaderForm : Form
         }
 
         return null;
+    }
+
+    private void SendShutdownCommand()
+    {
+        var pcId = GetSelectedAgentPcId();
+        var ip = GetSelectedAgentIp();
+        if (string.IsNullOrWhiteSpace(pcId) || string.IsNullOrWhiteSpace(ip))
+        {
+            MessageBox.Show("Select an agent row first.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        if (_service.IsLocalAgent(pcId, ip))
+        {
+            MessageBox.Show("Select a remote agent (not this PC).", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        if (!_service.SendShutdownCommand(pcId, out var error))
+        {
+            MessageBox.Show(error ?? "Unable to send shutdown command.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        _statusLabel.Text = "Sent shutdown command.";
     }
 
     public void AllowClose()

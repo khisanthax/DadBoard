@@ -40,6 +40,8 @@ public sealed class AgentService : IDisposable
     private DateTime _lastHello;
     private AgentState _state = new();
 
+    public event Action? ShutdownRequested;
+
     public AgentService(string? baseDir = null)
     {
         _baseDir = baseDir ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DadBoard");
@@ -270,6 +272,23 @@ public sealed class AgentService : IDisposable
             return;
         }
 
+        if (envelope.Type == ProtocolConstants.TypeCommandShutdownApp)
+        {
+            var command = envelope.Payload.Deserialize<ShutdownAppCommand>(JsonUtil.Options);
+            if (command == null)
+            {
+                SendAck(socket, envelope.CorrelationId, ok: false, "Invalid payload");
+                return;
+            }
+
+            _state.LastCommandId = envelope.CorrelationId;
+            _state.LastCommandType = envelope.Type;
+            _state.LastCommandTs = DateTime.UtcNow.ToString("O");
+
+            _ = Task.Run(() => ExecuteShutdown(envelope.CorrelationId, command, socket));
+            return;
+        }
+
         SendAck(socket, envelope.CorrelationId, ok: false, "Unknown command");
     }
 
@@ -345,6 +364,27 @@ public sealed class AgentService : IDisposable
             SendStatus(correlationId, "failed", null, message);
             _logger.Error($"LaunchExe failed corr={correlationId}: {ex.Message}");
         }
+    }
+
+    private Task ExecuteShutdown(string correlationId, ShutdownAppCommand command, WebSocket socket)
+    {
+        var reason = string.IsNullOrWhiteSpace(command.Reason) ? "Leader requested shutdown." : command.Reason;
+        _logger.Info($"Received ShutdownApp corr={correlationId} reason={reason}");
+        SendStatus(correlationId, "received", null, reason);
+        SendAck(socket, correlationId, ok: true, null);
+        SendStatus(correlationId, "stopping", null, "Shutting down.");
+        _logger.Info($"ShutdownApp ack sent corr={correlationId}.");
+
+        try
+        {
+            ShutdownRequested?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            _logger.Error($"ShutdownApp handler failed corr={correlationId}: {ex.Message}");
+        }
+
+        return Task.CompletedTask;
     }
 
     private async Task<bool> WaitForProcess(string[]? processNames, int timeoutSec)
