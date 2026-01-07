@@ -1,7 +1,10 @@
-﻿using System;
+
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using DadBoard.Spine.Shared;
 
@@ -10,51 +13,76 @@ namespace DadBoard.Leader;
 public sealed class LeaderForm : Form
 {
     private readonly LeaderService _service;
-    private readonly ListBox _gameList = new();
-    private readonly DataGridView _grid = new();
+    private readonly TabControl _tabs = new();
+    private readonly TabPage _agentsTab = new("Agents");
+    private readonly TabPage _gamesTab = new("Games");
+
+    private readonly DataGridView _agentsGrid = new();
+    private readonly DataGridView _gamesGrid = new();
     private readonly Label _statusLabel = new();
     private readonly System.Windows.Forms.Timer _refreshTimer = new();
     private readonly EventHandler _refreshHandler;
+
+    private readonly Button _refreshGamesButton = new();
+    private readonly CheckBox _showAllGamesToggle = new();
     private readonly Button _launchSelectedButton = new();
+    private readonly Button _launchCheckedButton = new();
+    private readonly Button _launchAllAvailableButton = new();
+    private readonly Button _selectAllAvailableButton = new();
+
+    private readonly Button _launchOnSelectedAgentButton = new();
     private readonly Button _testButton = new();
     private readonly Button _testMissingButton = new();
     private readonly Button _shutdownButton = new();
+
     private readonly ContextMenuStrip _rowMenu = new();
     private readonly ToolStripMenuItem _menuLaunch = new("Launch on this PC");
     private readonly ToolStripMenuItem _menuTest = new("Test: Open Notepad");
     private readonly ToolStripMenuItem _menuCopyPcId = new("Copy PC ID");
     private readonly ToolStripMenuItem _menuCopyIp = new("Copy IP");
     private readonly ToolStripMenuItem _menuViewError = new("View last error");
+
+    private readonly Dictionary<string, string> _gamePcColumnMap = new(StringComparer.OrdinalIgnoreCase);
     private int _refreshing;
+    private bool _gamesDirty = true;
     private bool _allowClose;
 
     public LeaderForm(LeaderService service)
     {
         _service = service;
-        Text = "DadBoard Leader (Phase 1)";
-        Size = new Size(980, 520);
+        Text = "DadBoard Leader (Phase 3)";
+        Size = new Size(1120, 640);
         StartPosition = FormStartPosition.CenterScreen;
 
         var layout = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            ColumnCount = 2,
+            ColumnCount = 1,
             RowCount = 2
         };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 260));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-        layout.Controls.Add(BuildLeftPanel(), 0, 0);
-        layout.Controls.Add(BuildGrid(), 1, 0);
-        layout.Controls.Add(_statusLabel, 0, 1);
-        layout.SetColumnSpan(_statusLabel, 2);
+        _tabs.Dock = DockStyle.Fill;
+        _agentsTab.Controls.Add(BuildAgentsTab());
+        _gamesTab.Controls.Add(BuildGamesTab());
+        _tabs.TabPages.Add(_agentsTab);
+        _tabs.TabPages.Add(_gamesTab);
+        _tabs.SelectedIndexChanged += (_, _) =>
+        {
+            if (_tabs.SelectedTab == _gamesTab)
+            {
+                _gamesDirty = true;
+                RefreshGamesGridSafe();
+            }
+        };
 
+        layout.Controls.Add(_tabs, 0, 0);
+        layout.Controls.Add(_statusLabel, 0, 1);
         Controls.Add(layout);
 
         _refreshTimer.Interval = 1000;
-        _refreshHandler = (_, _) => RefreshGridSafe();
+        _refreshHandler = (_, _) => RefreshAllSafe();
         _refreshTimer.Tick += _refreshHandler;
 
         Shown += (_, _) => StartRefresh();
@@ -69,85 +97,156 @@ public sealed class LeaderForm : Form
                 StopRefresh();
             }
         };
+
+        _service.InventoriesUpdated += () =>
+        {
+            if (IsDisposed || Disposing)
+            {
+                return;
+            }
+
+            BeginInvoke(new Action(() =>
+            {
+                _gamesDirty = true;
+                if (_tabs.SelectedTab == _gamesTab)
+                {
+                    RefreshGamesGridSafe();
+                }
+            }));
+        };
+
         FormClosing += OnFormClosing;
         FormClosed += OnFormClosed;
     }
 
-    private Control BuildLeftPanel()
+    private Control BuildAgentsTab()
     {
         var panel = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            RowCount = 7,
-            ColumnCount = 1
+            ColumnCount = 1,
+            RowCount = 2
         };
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-        panel.Controls.Add(new Label { Text = "Games", AutoSize = true }, 0, 0);
-
-        _gameList.Dock = DockStyle.Fill;
-        _gameList.DisplayMember = "Name";
-        foreach (var game in _service.GetGames())
+        var actions = new FlowLayoutPanel
         {
-            _gameList.Items.Add(game);
-        }
-        _gameList.SelectedIndexChanged += (_, _) => UpdateActionButtons();
-        panel.Controls.Add(_gameList, 0, 1);
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            AutoSize = true
+        };
 
-        _launchSelectedButton.Text = "Launch on Selected PC";
-        _launchSelectedButton.Dock = DockStyle.Top;
-        _launchSelectedButton.Height = 32;
-        _launchSelectedButton.Enabled = false;
-        _launchSelectedButton.Click += (_, _) => LaunchSelectedPc();
-        panel.Controls.Add(_launchSelectedButton, 0, 2);
-
-        var button = new Button { Text = "Launch on all", Dock = DockStyle.Top, Height = 32 };
-        button.Click += (_, _) => LaunchSelected();
-        panel.Controls.Add(button, 0, 3);
+        _launchOnSelectedAgentButton.Text = "Launch selected game";
+        _launchOnSelectedAgentButton.Height = 32;
+        _launchOnSelectedAgentButton.Enabled = false;
+        _launchOnSelectedAgentButton.Click += (_, _) => LaunchSelectedGameOnAgentFromMenu();
 
         _testButton.Text = "Test: Open Notepad";
-        _testButton.Dock = DockStyle.Top;
         _testButton.Height = 32;
         _testButton.Enabled = false;
         _testButton.Click += (_, _) => SendTestCommand();
-        panel.Controls.Add(_testButton, 0, 4);
 
         _testMissingButton.Text = "Test: Missing helpme.exe";
-        _testMissingButton.Dock = DockStyle.Top;
         _testMissingButton.Height = 32;
         _testMissingButton.Enabled = false;
         _testMissingButton.Click += (_, _) => SendMissingExeTest();
-        panel.Controls.Add(_testMissingButton, 0, 5);
 
         _shutdownButton.Text = "Close Remote DadBoard";
-        _shutdownButton.Dock = DockStyle.Top;
         _shutdownButton.Height = 32;
         _shutdownButton.Enabled = false;
         _shutdownButton.Click += (_, _) => SendShutdownCommand();
-        panel.Controls.Add(_shutdownButton, 0, 6);
 
+        actions.Controls.AddRange(new Control[]
+        {
+            _launchOnSelectedAgentButton,
+            _testButton,
+            _testMissingButton,
+            _shutdownButton
+        });
+
+        panel.Controls.Add(actions, 0, 0);
+        panel.Controls.Add(BuildAgentsGrid(), 0, 1);
         return panel;
     }
 
-    private Control BuildGrid()
+    private Control BuildGamesTab()
     {
-        _grid.Dock = DockStyle.Fill;
-        _grid.ReadOnly = true;
-        _grid.AllowUserToAddRows = false;
-        _grid.AllowUserToDeleteRows = false;
-        _grid.RowHeadersVisible = false;
-        _grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
-        _grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
-        _grid.MultiSelect = false;
-        _grid.SelectionChanged += (_, _) => UpdateActionButtons();
-        _grid.MouseDown += GridMouseDown;
-        _grid.ContextMenuStrip = _rowMenu;
+        var panel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2
+        };
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var actions = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            AutoSize = true
+        };
+
+        _refreshGamesButton.Text = "Refresh games";
+        _refreshGamesButton.Height = 32;
+        _refreshGamesButton.Click += (_, _) => RefreshGames();
+
+        _showAllGamesToggle.Text = "Show all games (including leader-only)";
+        _showAllGamesToggle.AutoSize = true;
+        _showAllGamesToggle.CheckedChanged += (_, _) =>
+        {
+            _gamesDirty = true;
+            RefreshGamesGridSafe();
+        };
+
+        _launchSelectedButton.Text = "Launch on Selected PC";
+        _launchSelectedButton.Height = 32;
+        _launchSelectedButton.Enabled = false;
+        _launchSelectedButton.Click += (_, _) => LaunchSelectedGameOnSelectedPc();
+
+        _launchCheckedButton.Text = "Launch on Checked PCs";
+        _launchCheckedButton.Height = 32;
+        _launchCheckedButton.Enabled = false;
+        _launchCheckedButton.Click += (_, _) => LaunchSelectedGameOnCheckedPcs();
+
+        _launchAllAvailableButton.Text = "Launch on All Available";
+        _launchAllAvailableButton.Height = 32;
+        _launchAllAvailableButton.Enabled = false;
+        _launchAllAvailableButton.Click += (_, _) => LaunchSelectedGameOnAllAvailable();
+
+        _selectAllAvailableButton.Text = "Select all available PCs";
+        _selectAllAvailableButton.Height = 32;
+        _selectAllAvailableButton.Enabled = false;
+        _selectAllAvailableButton.Click += (_, _) => SelectAllAvailableForSelectedGame();
+
+        actions.Controls.AddRange(new Control[]
+        {
+            _refreshGamesButton,
+            _showAllGamesToggle,
+            _launchSelectedButton,
+            _launchCheckedButton,
+            _launchAllAvailableButton,
+            _selectAllAvailableButton
+        });
+
+        panel.Controls.Add(actions, 0, 0);
+        panel.Controls.Add(BuildGamesGrid(), 0, 1);
+        return panel;
+    }
+    private Control BuildAgentsGrid()
+    {
+        _agentsGrid.Dock = DockStyle.Fill;
+        _agentsGrid.ReadOnly = true;
+        _agentsGrid.AllowUserToAddRows = false;
+        _agentsGrid.AllowUserToDeleteRows = false;
+        _agentsGrid.RowHeadersVisible = false;
+        _agentsGrid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+        _agentsGrid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+        _agentsGrid.MultiSelect = false;
+        _agentsGrid.SelectionChanged += (_, _) => UpdateAgentActions();
+        _agentsGrid.MouseDown += AgentsGridMouseDown;
+        _agentsGrid.ContextMenuStrip = _rowMenu;
 
         _rowMenu.Items.AddRange(new ToolStripItem[]
         {
@@ -160,7 +259,7 @@ public sealed class LeaderForm : Form
         });
         _rowMenu.Opening += (_, e) =>
         {
-            if (_grid.SelectedRows.Count != 1)
+            if (_agentsGrid.SelectedRows.Count != 1)
             {
                 e.Cancel = true;
                 return;
@@ -168,76 +267,210 @@ public sealed class LeaderForm : Form
 
             UpdateContextMenuState();
         };
-        _menuLaunch.Click += (_, _) => LaunchSelectedPc();
+        _menuLaunch.Click += (_, _) => LaunchSelectedGameOnAgentFromMenu();
         _menuTest.Click += (_, _) => SendTestCommand();
-        _menuCopyPcId.Click += (_, _) => CopySelectedValue("pcId");
-        _menuCopyIp.Click += (_, _) => CopySelectedValue("ip");
-        _menuViewError.Click += (_, _) => ShowSelectedError();
+        _menuCopyPcId.Click += (_, _) => CopySelectedAgentValue("pcId");
+        _menuCopyIp.Click += (_, _) => CopySelectedAgentValue("ip");
+        _menuViewError.Click += (_, _) => ShowSelectedAgentError();
 
-        EnsureGridColumns();
-
-        return _grid;
+        EnsureAgentsGridColumns();
+        return _agentsGrid;
     }
 
-    private void RefreshGridSafe()
+    private Control BuildGamesGrid()
     {
-        if (IsDisposed || Disposing || !_grid.IsHandleCreated || _grid.IsDisposed)
+        _gamesGrid.Dock = DockStyle.Fill;
+        _gamesGrid.ReadOnly = false;
+        _gamesGrid.AllowUserToAddRows = false;
+        _gamesGrid.AllowUserToDeleteRows = false;
+        _gamesGrid.RowHeadersVisible = false;
+        _gamesGrid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+        _gamesGrid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+        _gamesGrid.MultiSelect = false;
+        _gamesGrid.CurrentCellDirtyStateChanged += (_, _) =>
+        {
+            if (_gamesGrid.IsCurrentCellDirty)
+            {
+                _gamesGrid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+            }
+        };
+        _gamesGrid.CellValueChanged += (_, _) => UpdateGameActions();
+        _gamesGrid.SelectionChanged += (_, _) => UpdateGameActions();
+
+        return _gamesGrid;
+    }
+
+    private void RefreshAllSafe()
+    {
+        RefreshAgentsGridSafe();
+        if (_tabs.SelectedTab == _gamesTab && _gamesDirty)
+        {
+            RefreshGamesGridSafe();
+        }
+    }
+
+    private void RefreshAgentsGridSafe()
+    {
+        if (IsDisposed || Disposing || !_agentsGrid.IsHandleCreated || _agentsGrid.IsDisposed)
         {
             return;
         }
 
         if (InvokeRequired)
         {
-            BeginInvoke(new Action(RefreshGridSafe));
+            BeginInvoke(new Action(RefreshAgentsGridSafe));
             return;
         }
 
-        if (System.Threading.Interlocked.Exchange(ref _refreshing, 1) == 1)
+        if (Interlocked.Exchange(ref _refreshing, 1) == 1)
         {
             return;
         }
 
         try
         {
-        if (_grid.Columns.Count == 0)
-        {
-            EnsureGridColumns();
-        }
-
-        var selectedPcId = GetSelectedAgentPcId();
-        var snapshot = _service.GetAgentsSnapshot();
-        _grid.Rows.Clear();
-
-        foreach (var agent in snapshot)
-        {
-            var onlineText = FormatOnline(agent.Online, agent.LastSeen);
-            var commandStatus = FormatCommandStatus(agent.LastStatus);
-            var ackText = FormatAck(agent.LastAckTs, agent.LastAckOk, agent.LastAckError);
-            var resultText = string.IsNullOrWhiteSpace(agent.LastResult) ? "-" : agent.LastResult;
-            var lastError = agent.LastError ?? "";
-            var truncatedError = Truncate(lastError, 60);
-
-            _grid.Rows.Add(
-                agent.PcId,
-                agent.Ip,
-                agent.Name,
-                onlineText,
-                commandStatus,
-                ackText,
-                resultText,
-                truncatedError
-            );
-
-            var row = _grid.Rows[^1];
-            row.Cells["error"].ToolTipText = lastError;
-        }
-
-        _grid.ClearSelection();
-        if (!string.IsNullOrWhiteSpace(selectedPcId))
-        {
-            foreach (DataGridViewRow row in _grid.Rows)
+            if (_agentsGrid.Columns.Count == 0)
             {
-                if (row.Cells["pcId"].Value?.ToString() == selectedPcId)
+                EnsureAgentsGridColumns();
+            }
+
+            var selectedPcId = GetSelectedAgentPcId();
+            var snapshot = _service.GetAgentsSnapshot();
+            _agentsGrid.Rows.Clear();
+
+            foreach (var agent in snapshot)
+            {
+                var onlineText = FormatOnline(agent.Online, agent.LastSeen);
+                var commandStatus = FormatCommandStatus(agent.LastStatus);
+                var ackText = FormatAck(agent.LastAckTs, agent.LastAckOk, agent.LastAckError);
+                var resultText = string.IsNullOrWhiteSpace(agent.LastResult) ? "-" : agent.LastResult;
+                var lastError = agent.LastError ?? "";
+                var truncatedError = Truncate(lastError, 60);
+
+                _agentsGrid.Rows.Add(
+                    agent.PcId,
+                    agent.Ip,
+                    agent.Name,
+                    onlineText,
+                    commandStatus,
+                    ackText,
+                    resultText,
+                    truncatedError
+                );
+
+                var row = _agentsGrid.Rows[^1];
+                row.Cells["error"].ToolTipText = lastError;
+            }
+
+            _agentsGrid.ClearSelection();
+            if (!string.IsNullOrWhiteSpace(selectedPcId))
+            {
+                foreach (DataGridViewRow row in _agentsGrid.Rows)
+                {
+                    if (row.Cells["pcId"].Value?.ToString() == selectedPcId)
+                    {
+                        row.Selected = true;
+                        break;
+                    }
+                }
+            }
+
+            UpdateAgentActions();
+            var onlineSummary = $"Agents online: {snapshot.Count(a => a.Online)} / {snapshot.Count}";
+            var selectedFailure = GetSelectedAgentFailureMessage();
+            _statusLabel.Text = string.IsNullOrWhiteSpace(selectedFailure) ? onlineSummary : selectedFailure;
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _refreshing, 0);
+        }
+    }
+    private void RefreshGamesGridSafe()
+    {
+        if (IsDisposed || Disposing || !_gamesGrid.IsHandleCreated || _gamesGrid.IsDisposed)
+        {
+            return;
+        }
+
+        if (InvokeRequired)
+        {
+            BeginInvoke(new Action(RefreshGamesGridSafe));
+            return;
+        }
+
+        var selections = CaptureGameSelections();
+        var selectedAppId = GetSelectedGameAppId();
+
+        var leaderCatalog = _service.GetLeaderCatalog();
+        var agentInventories = _service.GetAgentInventoriesSnapshot();
+        var remoteAgents = _service.GetAgentsSnapshot()
+            .Where(a => !_service.IsLocalAgent(a.PcId, a.Ip))
+            .OrderBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        BuildGamesGridColumns(remoteAgents);
+
+        var availableAppIds = new HashSet<int>();
+        foreach (var inventory in agentInventories.Values)
+        {
+            foreach (var game in inventory.Games)
+            {
+                availableAppIds.Add(game.AppId);
+            }
+        }
+
+        var filtered = leaderCatalog
+            .Where(g => g.AppId > 0)
+            .OrderBy(g => g.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (!_showAllGamesToggle.Checked)
+        {
+            filtered = filtered.Where(g => availableAppIds.Contains(g.AppId)).ToList();
+        }
+
+        _gamesGrid.Rows.Clear();
+        foreach (var game in filtered)
+        {
+            var rowIndex = _gamesGrid.Rows.Add(game.AppId, game.Name);
+            var row = _gamesGrid.Rows[rowIndex];
+
+            foreach (var agent in remoteAgents)
+            {
+                if (!_gamePcColumnMap.TryGetValue(agent.PcId, out var columnName))
+                {
+                    continue;
+                }
+
+                var hasInventory = agentInventories.TryGetValue(agent.PcId, out var inventory);
+                var installed = hasInventory && inventory!.Games.Any(g => g.AppId == game.AppId);
+
+                var cell = new DataGridViewCheckBoxCell
+                {
+                    Value = selections.TryGetValue(game.AppId, out var pcSet) && pcSet.Contains(agent.PcId)
+                };
+
+                if (!installed)
+                {
+                    cell.ReadOnly = true;
+                    cell.Style.ForeColor = Color.Gray;
+                    cell.ToolTipText = "Not installed on this PC";
+                }
+                else
+                {
+                    cell.ToolTipText = "Installed. Check to include.";
+                }
+
+                row.Cells[columnName] = cell;
+            }
+        }
+
+        _gamesGrid.ClearSelection();
+        if (selectedAppId.HasValue)
+        {
+            foreach (DataGridViewRow row in _gamesGrid.Rows)
+            {
+                if (row.Cells["appId"].Value is int appId && appId == selectedAppId.Value)
                 {
                     row.Selected = true;
                     break;
@@ -245,53 +478,161 @@ public sealed class LeaderForm : Form
             }
         }
 
-        UpdateActionButtons();
-        var onlineSummary = $"Agents online: {snapshot.Count(a => a.Online)} / {snapshot.Count}";
-        var selectedFailure = GetSelectedFailureMessage();
-        _statusLabel.Text = string.IsNullOrWhiteSpace(selectedFailure) ? onlineSummary : selectedFailure;
-        }
-        finally
-        {
-            System.Threading.Interlocked.Exchange(ref _refreshing, 0);
-        }
+        _gamesDirty = false;
+        UpdateGameActions();
     }
 
-    private void EnsureGridColumns()
+    private void EnsureAgentsGridColumns()
     {
-        if (_grid.Columns.Count > 0)
+        if (_agentsGrid.Columns.Count > 0)
         {
             return;
         }
 
-        var pcIdCol = _grid.Columns.Add("pcId", "PC Id");
-        _grid.Columns[pcIdCol].Visible = false;
-        var ipCol = _grid.Columns.Add("ip", "IP");
-        _grid.Columns[ipCol].Visible = false;
-        _grid.Columns.Add("name", "PC Name");
-        _grid.Columns.Add("online", "Online");
-        _grid.Columns.Add("command", "Command Status");
-        _grid.Columns.Add("ack", "Ack");
-        _grid.Columns.Add("result", "Last Result");
-        _grid.Columns.Add("error", "Last Error");
+        var pcIdCol = _agentsGrid.Columns.Add("pcId", "PC Id");
+        _agentsGrid.Columns[pcIdCol].Visible = false;
+        var ipCol = _agentsGrid.Columns.Add("ip", "IP");
+        _agentsGrid.Columns[ipCol].Visible = false;
+        _agentsGrid.Columns.Add("name", "PC Name");
+        _agentsGrid.Columns.Add("online", "Online");
+        _agentsGrid.Columns.Add("command", "Command Status");
+        _agentsGrid.Columns.Add("ack", "Ack");
+        _agentsGrid.Columns.Add("result", "Last Result");
+        _agentsGrid.Columns.Add("error", "Last Error");
     }
 
-    private void LaunchSelected()
+    private void BuildGamesGridColumns(IEnumerable<AgentInfo> remoteAgents)
     {
-        if (_gameList.SelectedItem is not GameDefinition game)
+        _gamesGrid.Columns.Clear();
+        _gamePcColumnMap.Clear();
+
+        var appIdCol = _gamesGrid.Columns.Add("appId", "App Id");
+        _gamesGrid.Columns[appIdCol].Visible = false;
+        _gamesGrid.Columns.Add("name", "Game");
+
+        foreach (var agent in remoteAgents)
         {
-            MessageBox.Show("Select a game first.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            var columnName = $"pc_{agent.PcId}";
+            var column = new DataGridViewCheckBoxColumn
+            {
+                Name = columnName,
+                HeaderText = agent.Name,
+                AutoSizeMode = DataGridViewAutoSizeColumnMode.AllCells,
+                TrueValue = true,
+                FalseValue = false
+            };
+            _gamesGrid.Columns.Add(column);
+            _gamePcColumnMap[agent.PcId] = columnName;
+        }
+    }
+
+    private void RefreshGames()
+    {
+        _gamesDirty = true;
+        Task.Run(() => _service.RefreshSteamInventory());
+    }
+
+    private void LaunchSelectedGameOnSelectedPc()
+    {
+        var selection = GetSelectedGame();
+        if (selection == null)
+        {
+            MessageBox.Show("Select a game row first.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
-        _service.LaunchOnAll(game);
-        _statusLabel.Text = $"Launch triggered: {game.Name}";
+        var checkedPcs = GetCheckedPcIds(selection.Value.AppId);
+        if (checkedPcs.Count != 1)
+        {
+            MessageBox.Show("Check exactly one PC for this game.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var pcId = checkedPcs[0];
+        if (!_service.LaunchAppIdOnAgent(selection.Value.AppId, pcId, out var error))
+        {
+            MessageBox.Show(error ?? "Unable to launch on selected PC.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        _statusLabel.Text = $"Launch triggered: {selection.Value.Name} (selected PC)";
     }
 
-    private void LaunchSelectedPc()
+    private void LaunchSelectedGameOnCheckedPcs()
     {
-        if (_gameList.SelectedItem is not GameDefinition game)
+        var selection = GetSelectedGame();
+        if (selection == null)
         {
-            MessageBox.Show("Select a game first.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show("Select a game row first.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var checkedPcs = GetCheckedPcIds(selection.Value.AppId);
+        if (checkedPcs.Count == 0)
+        {
+            MessageBox.Show("Check at least one PC for this game.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        _service.LaunchAppIdOnAgents(selection.Value.AppId, checkedPcs);
+        _statusLabel.Text = $"Launch triggered: {selection.Value.Name} ({checkedPcs.Count} PCs)";
+    }
+
+    private void LaunchSelectedGameOnAllAvailable()
+    {
+        var selection = GetSelectedGame();
+        if (selection == null)
+        {
+            MessageBox.Show("Select a game row first.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var available = GetAvailablePcIds(selection.Value.AppId);
+        if (available.Count == 0)
+        {
+            MessageBox.Show("No available PCs for this game.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        _service.LaunchAppIdOnAgents(selection.Value.AppId, available);
+        _statusLabel.Text = $"Launch triggered: {selection.Value.Name} ({available.Count} PCs)";
+    }
+
+    private void SelectAllAvailableForSelectedGame()
+    {
+        var selection = GetSelectedGame();
+        if (selection == null)
+        {
+            MessageBox.Show("Select a game row first.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        if (_gamesGrid.SelectedRows.Count == 0)
+        {
+            return;
+        }
+
+        var row = _gamesGrid.SelectedRows[0];
+        foreach (var entry in _gamePcColumnMap)
+        {
+            var cell = row.Cells[entry.Value] as DataGridViewCheckBoxCell;
+            if (cell == null || cell.ReadOnly)
+            {
+                continue;
+            }
+
+            cell.Value = true;
+        }
+
+        UpdateGameActions();
+    }
+
+    private void LaunchSelectedGameOnAgentFromMenu()
+    {
+        var selection = GetSelectedGame();
+        if (selection == null)
+        {
+            MessageBox.Show("Select a game in the Games tab first.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
@@ -302,15 +643,14 @@ public sealed class LeaderForm : Form
             return;
         }
 
-        if (!_service.LaunchOnAgent(game, pcId, out var error))
+        if (!_service.LaunchAppIdOnAgent(selection.Value.AppId, pcId, out var error))
         {
             MessageBox.Show(error ?? "Unable to launch on selected PC.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
-        _statusLabel.Text = $"Launch triggered: {game.Name} (selected PC)";
+        _statusLabel.Text = $"Launch triggered: {selection.Value.Name} (selected PC)";
     }
-
     private void SendTestCommand()
     {
         var pcId = GetSelectedAgentPcId();
@@ -334,57 +674,6 @@ public sealed class LeaderForm : Form
         }
 
         _statusLabel.Text = "Sent test command: notepad.exe";
-    }
-
-    private string? GetSelectedAgentPcId()
-    {
-        if (_grid.SelectedRows.Count == 0)
-        {
-            return null;
-        }
-
-        var row = _grid.SelectedRows[0];
-        return row.Cells["pcId"].Value?.ToString();
-    }
-
-    private string? GetSelectedAgentIp()
-    {
-        if (_grid.SelectedRows.Count == 0)
-        {
-            return null;
-        }
-
-        var row = _grid.SelectedRows[0];
-        return row.Cells["ip"].Value?.ToString();
-    }
-
-    private void UpdateActionButtons()
-    {
-        if (_grid.SelectedRows.Count == 0)
-        {
-            _launchSelectedButton.Enabled = false;
-            _testButton.Enabled = false;
-            _testMissingButton.Enabled = false;
-            _shutdownButton.Enabled = false;
-            return;
-        }
-
-        var pcId = GetSelectedAgentPcId();
-        var ip = GetSelectedAgentIp();
-        if (string.IsNullOrWhiteSpace(pcId) || string.IsNullOrWhiteSpace(ip))
-        {
-            _launchSelectedButton.Enabled = false;
-            _testButton.Enabled = false;
-            _testMissingButton.Enabled = false;
-            _shutdownButton.Enabled = false;
-            return;
-        }
-
-        var enabled = !_service.IsLocalAgent(pcId, ip);
-        _launchSelectedButton.Enabled = _grid.SelectedRows.Count == 1;
-        _testButton.Enabled = enabled;
-        _testMissingButton.Enabled = enabled;
-        _shutdownButton.Enabled = enabled;
     }
 
     private void SendMissingExeTest()
@@ -412,25 +701,6 @@ public sealed class LeaderForm : Form
         _statusLabel.Text = "Sent test command: helpme.exe";
     }
 
-    private string? GetSelectedFailureMessage()
-    {
-        if (_grid.SelectedRows.Count == 0)
-        {
-            return null;
-        }
-
-        var row = _grid.SelectedRows[0];
-        var status = row.Cells["command"].Value?.ToString();
-        var message = row.Cells["error"].ToolTipText;
-        if (string.Equals(status, "Failed", StringComparison.OrdinalIgnoreCase) &&
-            !string.IsNullOrWhiteSpace(message))
-        {
-            return $"Selected failed: {message}";
-        }
-
-        return null;
-    }
-
     private void SendShutdownCommand()
     {
         var pcId = GetSelectedAgentPcId();
@@ -456,22 +726,194 @@ public sealed class LeaderForm : Form
         _statusLabel.Text = "Sent shutdown command.";
     }
 
-    private void GridMouseDown(object? sender, MouseEventArgs e)
+    private string? GetSelectedAgentPcId()
+    {
+        if (_agentsGrid.SelectedRows.Count == 0)
+        {
+            return null;
+        }
+
+        var row = _agentsGrid.SelectedRows[0];
+        return row.Cells["pcId"].Value?.ToString();
+    }
+
+    private string? GetSelectedAgentIp()
+    {
+        if (_agentsGrid.SelectedRows.Count == 0)
+        {
+            return null;
+        }
+
+        var row = _agentsGrid.SelectedRows[0];
+        return row.Cells["ip"].Value?.ToString();
+    }
+
+    private (int AppId, string Name)? GetSelectedGame()
+    {
+        if (_gamesGrid.SelectedRows.Count == 0)
+        {
+            return null;
+        }
+
+        var row = _gamesGrid.SelectedRows[0];
+        if (row.Cells["appId"].Value is not int appId)
+        {
+            return null;
+        }
+
+        var name = row.Cells["name"].Value?.ToString() ?? appId.ToString();
+        return (appId, name);
+    }
+
+    private int? GetSelectedGameAppId()
+    {
+        var selected = GetSelectedGame();
+        return selected?.AppId;
+    }
+
+    private Dictionary<int, HashSet<string>> CaptureGameSelections()
+    {
+        var selections = new Dictionary<int, HashSet<string>>();
+        foreach (DataGridViewRow row in _gamesGrid.Rows)
+        {
+            if (row.Cells["appId"].Value is not int appId)
+            {
+                continue;
+            }
+
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in _gamePcColumnMap)
+            {
+                if (row.Cells[entry.Value] is DataGridViewCheckBoxCell cell &&
+                    cell.Value is bool selected &&
+                    selected)
+                {
+                    set.Add(entry.Key);
+                }
+            }
+
+            selections[appId] = set;
+        }
+
+        return selections;
+    }
+
+    private List<string> GetCheckedPcIds(int appId)
+    {
+        var checkedPcIds = new List<string>();
+        foreach (DataGridViewRow row in _gamesGrid.Rows)
+        {
+            if (row.Cells["appId"].Value is not int rowAppId || rowAppId != appId)
+            {
+                continue;
+            }
+
+            foreach (var entry in _gamePcColumnMap)
+            {
+                if (row.Cells[entry.Value] is DataGridViewCheckBoxCell cell &&
+                    cell.Value is bool selected &&
+                    selected)
+                {
+                    checkedPcIds.Add(entry.Key);
+                }
+            }
+            break;
+        }
+
+        return checkedPcIds;
+    }
+
+    private List<string> GetAvailablePcIds(int appId)
+    {
+        var available = new List<string>();
+        foreach (DataGridViewRow row in _gamesGrid.Rows)
+        {
+            if (row.Cells["appId"].Value is not int rowAppId || rowAppId != appId)
+            {
+                continue;
+            }
+
+            foreach (var entry in _gamePcColumnMap)
+            {
+                if (row.Cells[entry.Value] is DataGridViewCheckBoxCell cell &&
+                    !cell.ReadOnly)
+                {
+                    available.Add(entry.Key);
+                }
+            }
+            break;
+        }
+
+        return available;
+    }
+
+    private void UpdateAgentActions()
+    {
+        if (_agentsGrid.SelectedRows.Count == 0)
+        {
+            _launchOnSelectedAgentButton.Enabled = false;
+            _testButton.Enabled = false;
+            _testMissingButton.Enabled = false;
+            _shutdownButton.Enabled = false;
+            return;
+        }
+
+        var pcId = GetSelectedAgentPcId();
+        var ip = GetSelectedAgentIp();
+        if (string.IsNullOrWhiteSpace(pcId) || string.IsNullOrWhiteSpace(ip))
+        {
+            _launchOnSelectedAgentButton.Enabled = false;
+            _testButton.Enabled = false;
+            _testMissingButton.Enabled = false;
+            _shutdownButton.Enabled = false;
+            return;
+        }
+
+        var enabled = !_service.IsLocalAgent(pcId, ip);
+        _launchOnSelectedAgentButton.Enabled = GetSelectedGame() != null;
+        _testButton.Enabled = enabled;
+        _testMissingButton.Enabled = enabled;
+        _shutdownButton.Enabled = enabled;
+    }
+
+    private void UpdateGameActions()
+    {
+        var selection = GetSelectedGame();
+        if (selection == null)
+        {
+            _launchSelectedButton.Enabled = false;
+            _launchCheckedButton.Enabled = false;
+            _launchAllAvailableButton.Enabled = false;
+            _selectAllAvailableButton.Enabled = false;
+            UpdateAgentActions();
+            return;
+        }
+
+        var checkedPcs = GetCheckedPcIds(selection.Value.AppId);
+        var available = GetAvailablePcIds(selection.Value.AppId);
+        _launchSelectedButton.Enabled = checkedPcs.Count == 1;
+        _launchCheckedButton.Enabled = checkedPcs.Count > 0;
+        _launchAllAvailableButton.Enabled = available.Count > 0;
+        _selectAllAvailableButton.Enabled = available.Count > 0;
+        UpdateAgentActions();
+    }
+
+    private void AgentsGridMouseDown(object? sender, MouseEventArgs e)
     {
         if (e.Button != MouseButtons.Right)
         {
             return;
         }
 
-        var hit = _grid.HitTest(e.X, e.Y);
+        var hit = _agentsGrid.HitTest(e.X, e.Y);
         if (hit.RowIndex < 0)
         {
             return;
         }
 
-        _grid.ClearSelection();
-        _grid.Rows[hit.RowIndex].Selected = true;
-        UpdateActionButtons();
+        _agentsGrid.ClearSelection();
+        _agentsGrid.Rows[hit.RowIndex].Selected = true;
+        UpdateAgentActions();
     }
 
     private void UpdateContextMenuState()
@@ -480,35 +922,35 @@ public sealed class LeaderForm : Form
         var ip = GetSelectedAgentIp();
         var hasSelection = !string.IsNullOrWhiteSpace(pcId) && !string.IsNullOrWhiteSpace(ip);
         var isLocal = hasSelection && _service.IsLocalAgent(pcId!, ip!);
-        _menuLaunch.Enabled = hasSelection;
+        _menuLaunch.Enabled = hasSelection && GetSelectedGame() != null;
         _menuTest.Enabled = hasSelection && !isLocal;
         _menuCopyPcId.Enabled = hasSelection;
         _menuCopyIp.Enabled = hasSelection;
         _menuViewError.Enabled = hasSelection;
     }
 
-    private void CopySelectedValue(string column)
+    private void CopySelectedAgentValue(string column)
     {
-        if (_grid.SelectedRows.Count == 0)
+        if (_agentsGrid.SelectedRows.Count == 0)
         {
             return;
         }
 
-        var value = _grid.SelectedRows[0].Cells[column].Value?.ToString();
+        var value = _agentsGrid.SelectedRows[0].Cells[column].Value?.ToString();
         if (!string.IsNullOrWhiteSpace(value))
         {
             Clipboard.SetText(value);
         }
     }
 
-    private void ShowSelectedError()
+    private void ShowSelectedAgentError()
     {
-        if (_grid.SelectedRows.Count == 0)
+        if (_agentsGrid.SelectedRows.Count == 0)
         {
             return;
         }
 
-        var message = _grid.SelectedRows[0].Cells["error"].ToolTipText;
+        var message = _agentsGrid.SelectedRows[0].Cells["error"].ToolTipText;
         if (string.IsNullOrWhiteSpace(message))
         {
             MessageBox.Show("No error recorded for this PC.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -516,6 +958,25 @@ public sealed class LeaderForm : Form
         }
 
         MessageBox.Show(message, "DadBoard - Last Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+    }
+
+    private string? GetSelectedAgentFailureMessage()
+    {
+        if (_agentsGrid.SelectedRows.Count == 0)
+        {
+            return null;
+        }
+
+        var row = _agentsGrid.SelectedRows[0];
+        var status = row.Cells["command"].Value?.ToString();
+        var message = row.Cells["error"].ToolTipText;
+        if (string.Equals(status, "Failed", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(message))
+        {
+            return $"Selected failed: {message}";
+        }
+
+        return null;
     }
 
     private static string FormatOnline(bool online, DateTime lastSeen)
@@ -541,7 +1002,7 @@ public sealed class LeaderForm : Form
             "received" => "Running",
             "launching" => "Running",
             "stopping" => "Running",
-            _ => "Running"
+            _ => "Idle"
         };
     }
 
@@ -578,7 +1039,7 @@ public sealed class LeaderForm : Form
             return;
         }
 
-        RefreshGridSafe();
+        RefreshAllSafe();
         _refreshTimer.Start();
     }
 

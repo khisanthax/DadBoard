@@ -23,6 +23,9 @@ public sealed class LeaderService : IDisposable
     private readonly string _configPath;
     private readonly string _knownAgentsPath;
     private readonly string _statePath;
+    private readonly string _leaderDataDir;
+    private readonly string _leaderInventoryPath;
+    private readonly string _agentInventoriesPath;
 
     private readonly LeaderLogger _logger;
     private readonly KnownAgentsStore _knownAgentsStore;
@@ -35,6 +38,11 @@ public sealed class LeaderService : IDisposable
     private readonly ConcurrentDictionary<string, AgentInfo> _agents = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, AgentConnection> _connections = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, Timer> _commandTimeouts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, GameInventory> _agentInventories = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _inventoryLock = new();
+    private List<SteamGameEntry> _leaderCatalog = new();
+    private DateTime _leaderCatalogTs;
+    private readonly ConcurrentDictionary<string, DateTime> _lastInventoryScan = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly CancellationTokenSource _cts = new();
     private UdpClient? _udp;
@@ -44,6 +52,8 @@ public sealed class LeaderService : IDisposable
     private Timer? _reconnectTimer;
     private readonly ConcurrentDictionary<string, DateTime> _lastReconnectAttempt = new(StringComparer.OrdinalIgnoreCase);
 
+    public event Action? InventoriesUpdated;
+
     public LeaderService(string? baseDir = null)
     {
         _baseDir = baseDir ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DadBoard");
@@ -52,9 +62,13 @@ public sealed class LeaderService : IDisposable
         _configPath = Path.Combine(_leaderDir, "leader.config.json");
         _knownAgentsPath = Path.Combine(_baseDir, "known_agents.json");
         _statePath = Path.Combine(_leaderDir, "leader_state.json");
+        _leaderDataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DadBoard", "Leader");
+        _leaderInventoryPath = Path.Combine(_leaderDataDir, "leader_inventory.json");
+        _agentInventoriesPath = Path.Combine(_leaderDataDir, "agent_inventories.json");
 
         Directory.CreateDirectory(_leaderDir);
         Directory.CreateDirectory(_logDir);
+        Directory.CreateDirectory(_leaderDataDir);
 
         _logger = new LeaderLogger(Path.Combine(_logDir, "leader.log"));
         _knownAgentsStore = new KnownAgentsStore(_knownAgentsPath);
@@ -63,17 +77,55 @@ public sealed class LeaderService : IDisposable
         _localIps = GetLocalIps();
 
         _config = LoadConfig();
+        LoadInventoryCaches();
 
         StartDiscovery();
         _offlineTimer = new Timer(_ => UpdateOnlineStates(), null, 0, 1000);
         _persistTimer = new Timer(_ => PersistKnownAgents(), null, 0, 5000);
         _stateTimer = new Timer(_ => PersistState(), null, 0, 1000);
         _reconnectTimer = new Timer(_ => TryReconnectOnlineAgents(), null, 0, 2000);
+
+        _ = Task.Run(RefreshSteamInventory);
     }
 
     public LeaderConfig Config => _config;
 
     public IReadOnlyList<GameDefinition> GetGames() => _config.Games;
+
+    public IReadOnlyList<SteamGameEntry> GetLeaderCatalog()
+    {
+        lock (_inventoryLock)
+        {
+            return _leaderCatalog.ToList();
+        }
+    }
+
+    public IReadOnlyDictionary<string, GameInventory> GetAgentInventoriesSnapshot()
+    {
+        return _agentInventories.ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+    }
+
+    public void RefreshSteamInventory()
+    {
+        var scan = SteamLibraryScanner.ScanInstalledGames();
+        lock (_inventoryLock)
+        {
+            _leaderCatalog = scan.Games.OrderBy(g => g.Name, StringComparer.OrdinalIgnoreCase).ToList();
+            _leaderCatalogTs = DateTime.UtcNow;
+        }
+        SaveLeaderInventoryCache();
+        InventoriesUpdated?.Invoke();
+
+        foreach (var agent in _agents.Values)
+        {
+            if (!agent.Online)
+            {
+                continue;
+            }
+
+            _ = Task.Run(() => SendInventoryScan(agent));
+        }
+    }
 
     public bool IsLocalAgent(string pcId, string ip)
     {
@@ -150,6 +202,36 @@ public sealed class LeaderService : IDisposable
 
         _ = Task.Run(() => SendLaunchCommand(agent, game));
         return true;
+    }
+
+    public bool LaunchAppIdOnAgent(int appId, string pcId, out string? error)
+    {
+        error = null;
+        if (!_agents.TryGetValue(pcId, out var agent))
+        {
+            error = "Agent not found.";
+            return false;
+        }
+
+        if (!agent.Online)
+        {
+            error = "Agent is offline.";
+            return false;
+        }
+
+        _ = Task.Run(() => SendLaunchAppId(agent, appId));
+        return true;
+    }
+
+    public void LaunchAppIdOnAgents(int appId, IEnumerable<string> pcIds)
+    {
+        foreach (var pcId in pcIds)
+        {
+            if (_agents.TryGetValue(pcId, out var agent) && agent.Online)
+            {
+                _ = Task.Run(() => SendLaunchAppId(agent, appId));
+            }
+        }
     }
 
     public bool SendTestCommand(string pcId, out string? error)
@@ -269,6 +351,16 @@ public sealed class LeaderService : IDisposable
         agent.WsPort = hello.WsPort > 0 ? hello.WsPort : _config.WsPortDefault;
         agent.LastSeen = DateTime.UtcNow;
         agent.Online = true;
+
+        if (!_agentInventories.ContainsKey(agent.PcId))
+        {
+            var lastScan = _lastInventoryScan.GetOrAdd(agent.PcId, _ => DateTime.MinValue);
+            if ((DateTime.UtcNow - lastScan).TotalSeconds > 30)
+            {
+                _lastInventoryScan[agent.PcId] = DateTime.UtcNow;
+                _ = Task.Run(() => SendInventoryScan(agent));
+            }
+        }
     }
 
     private void UpdateOnlineStates()
@@ -347,6 +439,59 @@ public sealed class LeaderService : IDisposable
         agent.LastCommandTs = DateTime.UtcNow;
         agent.LastStatus = "sent";
         agent.LastStatusMessage = $"Sent {game.Name}";
+        agent.LastResult = "Pending";
+        agent.LastError = "";
+        StartTimeout(agent.PcId, correlationId);
+
+        try
+        {
+            await connection.Socket.SendAsync(buffer, WebSocketMessageType.Text, true, _cts.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            agent.LastStatus = "failed";
+            agent.LastStatusMessage = ex.Message;
+            agent.LastResult = "Failed";
+            agent.LastError = ex.Message;
+        }
+    }
+
+    private async Task SendLaunchAppId(AgentInfo agent, int appId)
+    {
+        var connection = await EnsureConnection(agent).ConfigureAwait(false);
+        if (connection == null || connection.Socket.State != WebSocketState.Open)
+        {
+            agent.LastStatus = "ws_error";
+            agent.LastStatusMessage = connection?.LastError ?? "Unable to connect";
+            agent.LastResult = "Failed";
+            agent.LastError = agent.LastStatusMessage;
+            return;
+        }
+
+        var correlationId = Guid.NewGuid().ToString("N");
+        var payload = new LaunchGameCommand
+        {
+            GameId = appId.ToString(),
+            LaunchUrl = $"steam://run/{appId}",
+            ReadyTimeoutSec = 120
+        };
+
+        var envelope = new
+        {
+            type = ProtocolConstants.TypeCommandLaunchGame,
+            correlationId,
+            pcId = agent.PcId,
+            payload,
+            ts = DateTime.UtcNow.ToString("O")
+        };
+
+        var json = JsonSerializer.Serialize(envelope, JsonUtil.Options);
+        var buffer = Encoding.UTF8.GetBytes(json);
+
+        agent.LastCommandId = correlationId;
+        agent.LastCommandTs = DateTime.UtcNow;
+        agent.LastStatus = "sent";
+        agent.LastStatusMessage = $"Sent app {appId}";
         agent.LastResult = "Pending";
         agent.LastError = "";
         StartTimeout(agent.PcId, correlationId);
@@ -542,6 +687,40 @@ public sealed class LeaderService : IDisposable
         }
     }
 
+    private async Task SendInventoryScan(AgentInfo agent)
+    {
+        var connection = await EnsureConnection(agent).ConfigureAwait(false);
+        if (connection == null || connection.Socket.State != WebSocketState.Open)
+        {
+            _logger.Warn($"Inventory scan skipped for {agent.Name}: {connection?.LastError ?? "Unable to connect"}");
+            return;
+        }
+
+        var correlationId = Guid.NewGuid().ToString("N");
+        _lastInventoryScan[agent.PcId] = DateTime.UtcNow;
+        var envelope = new
+        {
+            type = ProtocolConstants.TypeCommandScanSteamGames,
+            correlationId,
+            pcId = agent.PcId,
+            payload = new ScanSteamGamesCommand(),
+            ts = DateTime.UtcNow.ToString("O")
+        };
+
+        var json = JsonSerializer.Serialize(envelope, JsonUtil.Options);
+        var buffer = Encoding.UTF8.GetBytes(json);
+
+        try
+        {
+            await connection.Socket.SendAsync(buffer, WebSocketMessageType.Text, true, _cts.Token).ConfigureAwait(false);
+            _logger.Info($"Sent ScanSteamGames to pcId={agent.PcId} ip={agent.Ip} ws={agent.WsPort} corr={correlationId}");
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn($"ScanSteamGames send failed for {agent.Name}: {ex.Message}");
+        }
+    }
+
     private async Task<AgentConnection?> EnsureConnection(AgentInfo agent)
     {
         if (_connections.TryGetValue(agent.PcId, out var existing) && existing.Socket.State == WebSocketState.Open)
@@ -614,6 +793,29 @@ public sealed class LeaderService : IDisposable
             return;
         }
 
+        if (envelope.Type == ProtocolConstants.TypeSteamInventory)
+        {
+            var inventory = envelope.Payload.Deserialize<GameInventory>(JsonUtil.Options);
+            if (inventory != null)
+            {
+                if (string.IsNullOrWhiteSpace(inventory.PcId))
+                {
+                    inventory.PcId = envelope.PcId;
+                }
+
+                if (string.IsNullOrWhiteSpace(inventory.Ts))
+                {
+                    inventory.Ts = DateTime.UtcNow.ToString("O");
+                }
+
+                _agentInventories[inventory.PcId] = inventory;
+                SaveAgentInventoriesCache();
+                InventoriesUpdated?.Invoke();
+            }
+
+            return;
+        }
+
         if (envelope.Type == ProtocolConstants.TypeAck)
         {
             var ack = envelope.Payload.Deserialize<AckPayload>(JsonUtil.Options);
@@ -662,6 +864,85 @@ public sealed class LeaderService : IDisposable
         {
             agent.LastResult = "Timed out";
             agent.LastError = message ?? "Command timeout.";
+        }
+    }
+
+    private void LoadInventoryCaches()
+    {
+        try
+        {
+            if (File.Exists(_leaderInventoryPath))
+            {
+                var json = File.ReadAllText(_leaderInventoryPath);
+                var cache = JsonSerializer.Deserialize<LeaderInventoryCacheFile>(json, JsonUtil.Options);
+                if (cache != null)
+                {
+                    _leaderCatalog = cache.Games.ToList();
+                    _leaderCatalogTs = DateTime.TryParse(cache.Ts, out var ts) ? ts : DateTime.MinValue;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn($"Failed to load leader inventory cache: {ex.Message}");
+        }
+
+        try
+        {
+            if (File.Exists(_agentInventoriesPath))
+            {
+                var json = File.ReadAllText(_agentInventoriesPath);
+                var cache = JsonSerializer.Deserialize<AgentInventoriesCacheFile>(json, JsonUtil.Options);
+                if (cache != null)
+                {
+                    foreach (var inventory in cache.Inventories)
+                    {
+                        if (!string.IsNullOrWhiteSpace(inventory.PcId))
+                        {
+                            _agentInventories[inventory.PcId] = inventory;
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn($"Failed to load agent inventories cache: {ex.Message}");
+        }
+    }
+
+    private void SaveLeaderInventoryCache()
+    {
+        try
+        {
+            var cache = new LeaderInventoryCacheFile
+            {
+                Ts = _leaderCatalogTs == default ? DateTime.UtcNow.ToString("O") : _leaderCatalogTs.ToString("O"),
+                Games = _leaderCatalog.ToArray()
+            };
+            var json = JsonSerializer.Serialize(cache, JsonUtil.Options);
+            File.WriteAllText(_leaderInventoryPath, json);
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn($"Failed to save leader inventory cache: {ex.Message}");
+        }
+    }
+
+    private void SaveAgentInventoriesCache()
+    {
+        try
+        {
+            var cache = new AgentInventoriesCacheFile
+            {
+                Inventories = _agentInventories.Values.ToArray()
+            };
+            var json = JsonSerializer.Serialize(cache, JsonUtil.Options);
+            File.WriteAllText(_agentInventoriesPath, json);
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn($"Failed to save agent inventories cache: {ex.Message}");
         }
     }
 

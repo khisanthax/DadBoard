@@ -11,6 +11,8 @@ public static class ProtocolConstants
     public const string TypeCommandLaunchGame = "Command.LaunchGame";
     public const string TypeCommandLaunchExe = "Command.LaunchExe";
     public const string TypeCommandShutdownApp = "Command.ShutdownApp";
+    public const string TypeCommandScanSteamGames = "Command.ScanSteamGames";
+    public const string TypeSteamInventory = "SteamInventory";
     public const string TypeAck = "Ack";
     public const string TypeStatus = "Status";
 }
@@ -62,6 +64,10 @@ public sealed class ShutdownAppCommand
     public string? Reason { get; set; }
 }
 
+public sealed class ScanSteamGamesCommand
+{
+}
+
 public sealed class AckPayload
 {
     public bool Ok { get; set; }
@@ -103,6 +109,20 @@ public sealed class GameDefinition
     public string? ExePath { get; set; }
     public string[]? ProcessNames { get; set; }
     public int ReadyTimeoutSec { get; set; } = 120;
+}
+
+public sealed class SteamGameEntry
+{
+    public int AppId { get; set; }
+    public string? Name { get; set; }
+}
+
+public sealed class GameInventory
+{
+    public string PcId { get; set; } = "";
+    public string MachineName { get; set; } = "";
+    public SteamGameEntry[] Games { get; set; } = Array.Empty<SteamGameEntry>();
+    public string Ts { get; set; } = "";
 }
 
 public sealed class KnownAgentRecord

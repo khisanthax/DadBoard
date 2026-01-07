@@ -272,6 +272,16 @@ public sealed class AgentService : IDisposable
             return;
         }
 
+        if (envelope.Type == ProtocolConstants.TypeCommandScanSteamGames)
+        {
+            _state.LastCommandId = envelope.CorrelationId;
+            _state.LastCommandType = envelope.Type;
+            _state.LastCommandTs = DateTime.UtcNow.ToString("O");
+
+            _ = Task.Run(() => ExecuteScanSteamGames(envelope.CorrelationId, socket));
+            return;
+        }
+
         if (envelope.Type == ProtocolConstants.TypeCommandShutdownApp)
         {
             var command = envelope.Payload.Deserialize<ShutdownAppCommand>(JsonUtil.Options);
@@ -329,6 +339,34 @@ public sealed class AgentService : IDisposable
         {
             SendStatus(correlationId, "failed", command.GameId, ex.Message);
         }
+    }
+
+    private Task ExecuteScanSteamGames(string correlationId, WebSocket socket)
+    {
+        SendAck(socket, correlationId, ok: true, null);
+        _logger.Info($"ScanSteamGames ack sent corr={correlationId}.");
+
+        try
+        {
+            var scan = SteamLibraryScanner.ScanInstalledGames();
+            var inventory = new GameInventory
+            {
+                PcId = _config.PcId,
+                MachineName = _config.DisplayName,
+                Games = scan.Games,
+                Ts = DateTime.UtcNow.ToString("O")
+            };
+
+            SendEnvelope(socket, ProtocolConstants.TypeSteamInventory, correlationId, inventory);
+            _logger.Info($"ScanSteamGames sent {inventory.Games.Length} games corr={correlationId}.");
+        }
+        catch (Exception ex)
+        {
+            _logger.Error($"ScanSteamGames failed corr={correlationId}: {ex.Message}");
+            SendAck(socket, correlationId, ok: false, ex.Message);
+        }
+
+        return Task.CompletedTask;
     }
 
     private async Task ExecuteLaunchExe(string correlationId, LaunchExeCommand command, WebSocket socket)
