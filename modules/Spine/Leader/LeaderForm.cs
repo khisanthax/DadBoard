@@ -29,8 +29,7 @@ public sealed class LeaderForm : Form
     private readonly CheckBox _requireAllToggle = new();
     private readonly FlowLayoutPanel _filterPanel = new();
     private readonly FlowLayoutPanel _targetPanel = new();
-    private readonly Button _launchSelectedButton = new();
-    private readonly Button _launchCheckedButton = new();
+    private readonly Button _launchGameButton = new();
     private readonly Button _selectAllAvailableButton = new();
 
     private readonly Button _launchOnSelectedAgentButton = new();
@@ -280,15 +279,10 @@ public sealed class LeaderForm : Form
             AutoSize = true
         };
 
-        _launchSelectedButton.Text = "Launch on Selected PC";
-        _launchSelectedButton.Height = 32;
-        _launchSelectedButton.Enabled = false;
-        _launchSelectedButton.Click += (_, _) => LaunchSelectedGameOnSelectedPc();
-
-        _launchCheckedButton.Text = "Launch on Checked PCs";
-        _launchCheckedButton.Height = 32;
-        _launchCheckedButton.Enabled = false;
-        _launchCheckedButton.Click += (_, _) => LaunchSelectedGameOnCheckedPcs();
+        _launchGameButton.Text = "Launch Game";
+        _launchGameButton.Height = 32;
+        _launchGameButton.Enabled = false;
+        _launchGameButton.Click += (_, _) => LaunchSelectedGameOnTargets();
 
         _selectAllAvailableButton.Text = "Select all available PCs";
         _selectAllAvailableButton.Height = 32;
@@ -297,8 +291,7 @@ public sealed class LeaderForm : Form
 
         launchButtons.Controls.AddRange(new Control[]
         {
-            _launchSelectedButton,
-            _launchCheckedButton,
+            _launchGameButton,
             _selectAllAvailableButton
         });
 
@@ -549,6 +542,10 @@ public sealed class LeaderForm : Form
                     }
                 }
             }
+            else if (_gamesGrid.Rows.Count > 0)
+            {
+                _gamesGrid.Rows[0].Selected = true;
+            }
 
             UpdateTargetControls(remoteAgents, inventorySets, inventoryErrors);
             _gamesDirty = false;
@@ -639,33 +636,7 @@ public sealed class LeaderForm : Form
         Task.Run(() => _service.RefreshSteamInventory());
     }
 
-    private void LaunchSelectedGameOnSelectedPc()
-    {
-        var selection = GetSelectedGame();
-        if (selection == null)
-        {
-            MessageBox.Show("Select a game row first.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return;
-        }
-
-        var checkedPcs = GetCheckedTargetPcIds();
-        if (checkedPcs.Count != 1)
-        {
-            MessageBox.Show("Check exactly one PC for this game.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return;
-        }
-
-        var pcId = checkedPcs[0];
-        if (!_service.LaunchAppIdOnAgent(selection.Value.AppId, pcId, out var error))
-        {
-            MessageBox.Show(error ?? "Unable to launch on selected PC.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
-        }
-
-        _statusLabel.Text = $"Launch triggered: {selection.Value.Name} (selected PC)";
-    }
-
-    private void LaunchSelectedGameOnCheckedPcs()
+    private void LaunchSelectedGameOnTargets()
     {
         var selection = GetSelectedGame();
         if (selection == null)
@@ -1136,16 +1107,14 @@ public sealed class LeaderForm : Form
         var selection = GetSelectedGame();
         if (selection == null)
         {
-            _launchSelectedButton.Enabled = false;
-            _launchCheckedButton.Enabled = false;
+            _launchGameButton.Enabled = false;
             _selectAllAvailableButton.Enabled = false;
             UpdateAgentActions();
             return;
         }
 
         var checkedTargets = GetCheckedTargetPcIds();
-        _launchSelectedButton.Enabled = checkedTargets.Count == 1;
-        _launchCheckedButton.Enabled = checkedTargets.Count > 0;
+        _launchGameButton.Enabled = checkedTargets.Count > 0;
         _selectAllAvailableButton.Enabled = _targetCheckboxes.Values.Any(cb => cb.Enabled);
         UpdateAgentActions();
     }
