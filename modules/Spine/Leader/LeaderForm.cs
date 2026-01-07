@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -299,6 +300,14 @@ public sealed class LeaderForm : Form
                 _gamesGrid.CommitEdit(DataGridViewDataErrorContexts.Commit);
             }
         };
+        _gamesGrid.CellBeginEdit += (_, e) =>
+        {
+            var cell = _gamesGrid[e.ColumnIndex, e.RowIndex];
+            if (cell is DataGridViewCheckBoxCell && cell.ReadOnly)
+            {
+                e.Cancel = true;
+            }
+        };
         _gamesGrid.CellValueChanged += (_, _) => UpdateGameActions();
         _gamesGrid.SelectionChanged += (_, _) => UpdateGameActions();
 
@@ -403,88 +412,97 @@ public sealed class LeaderForm : Form
             return;
         }
 
-        var selections = CaptureGameSelections();
-        var selectedAppId = GetSelectedGameAppId();
-
-        var leaderCatalog = _service.GetLeaderCatalog();
-        var agentInventories = _service.GetAgentInventoriesSnapshot();
-        var remoteAgents = _service.GetAgentsSnapshot()
-            .Where(a => !_service.IsLocalAgent(a.PcId, a.Ip))
-            .OrderBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        BuildGamesGridColumns(remoteAgents);
-
-        var availableAppIds = new HashSet<int>();
-        foreach (var inventory in agentInventories.Values)
+        try
         {
-            foreach (var game in inventory.Games)
+            var selections = CaptureGameSelections();
+            var selectedAppId = GetSelectedGameAppId();
+
+            var leaderCatalog = _service.GetLeaderCatalog();
+            var agentInventories = _service.GetAgentInventoriesSnapshot();
+            var remoteAgents = _service.GetAgentsSnapshot()
+                .Where(a => !_service.IsLocalAgent(a.PcId, a.Ip))
+                .OrderBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            EnsureGamesGridColumns(remoteAgents);
+
+            var availableAppIds = new HashSet<int>();
+            foreach (var inventory in agentInventories.Values)
             {
-                availableAppIds.Add(game.AppId);
-            }
-        }
-
-        var filtered = leaderCatalog
-            .Where(g => g.AppId > 0)
-            .OrderBy(g => g.Name, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        if (!_showAllGamesToggle.Checked)
-        {
-            filtered = filtered.Where(g => availableAppIds.Contains(g.AppId)).ToList();
-        }
-
-        _gamesGrid.Rows.Clear();
-        foreach (var game in filtered)
-        {
-            var rowIndex = _gamesGrid.Rows.Add(game.AppId, game.Name);
-            var row = _gamesGrid.Rows[rowIndex];
-
-            foreach (var agent in remoteAgents)
-            {
-                if (!_gamePcColumnMap.TryGetValue(agent.PcId, out var columnName))
+                foreach (var game in inventory.Games)
                 {
-                    continue;
-                }
-
-                var hasInventory = agentInventories.TryGetValue(agent.PcId, out var inventory);
-                var installed = hasInventory && inventory!.Games.Any(g => g.AppId == game.AppId);
-
-                var cell = new DataGridViewCheckBoxCell
-                {
-                    Value = selections.TryGetValue(game.AppId, out var pcSet) && pcSet.Contains(agent.PcId)
-                };
-
-                if (!installed)
-                {
-                    cell.ReadOnly = true;
-                    cell.Style.ForeColor = Color.Gray;
-                    cell.ToolTipText = "Not installed on this PC";
-                }
-                else
-                {
-                    cell.ToolTipText = "Installed. Check to include.";
-                }
-
-                row.Cells[columnName] = cell;
-            }
-        }
-
-        _gamesGrid.ClearSelection();
-        if (selectedAppId.HasValue)
-        {
-            foreach (DataGridViewRow row in _gamesGrid.Rows)
-            {
-                if (row.Cells["appId"].Value is int appId && appId == selectedAppId.Value)
-                {
-                    row.Selected = true;
-                    break;
+                    availableAppIds.Add(game.AppId);
                 }
             }
-        }
 
-        _gamesDirty = false;
-        UpdateGameActions();
+            var filtered = leaderCatalog
+                .Where(g => g.AppId > 0)
+                .OrderBy(g => g.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (!_showAllGamesToggle.Checked)
+            {
+                filtered = filtered.Where(g => availableAppIds.Contains(g.AppId)).ToList();
+            }
+
+            _gamesGrid.Rows.Clear();
+            foreach (var game in filtered)
+            {
+                var rowIndex = _gamesGrid.Rows.Add(game.AppId, game.Name);
+                var row = _gamesGrid.Rows[rowIndex];
+
+                foreach (var agent in remoteAgents)
+                {
+                    if (!_gamePcColumnMap.TryGetValue(agent.PcId, out var columnName))
+                    {
+                        continue;
+                    }
+
+                    var hasInventory = agentInventories.TryGetValue(agent.PcId, out var inventory);
+                    var installed = hasInventory && inventory!.Games.Any(g => g.AppId == game.AppId);
+
+                    var cell = new DataGridViewCheckBoxCell
+                    {
+                        Value = selections.TryGetValue(game.AppId, out var pcSet) && pcSet.Contains(agent.PcId)
+                    };
+
+                    row.Cells[columnName] = cell;
+
+                    if (!installed)
+                    {
+                        cell.ReadOnly = true;
+                        cell.Style.ForeColor = SystemColors.GrayText;
+                        cell.Style.BackColor = SystemColors.Control;
+                        cell.ToolTipText = "Not installed on this PC";
+                    }
+                    else
+                    {
+                        cell.ToolTipText = "Installed. Check to include.";
+                    }
+                }
+            }
+
+            _gamesGrid.ClearSelection();
+            if (selectedAppId.HasValue)
+            {
+                foreach (DataGridViewRow row in _gamesGrid.Rows)
+                {
+                    if (row.Cells["appId"].Value is int appId && appId == selectedAppId.Value)
+                    {
+                        row.Selected = true;
+                        break;
+                    }
+                }
+            }
+
+            _gamesDirty = false;
+            UpdateGameActions();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Games grid refresh failed: {ex}");
+            _statusLabel.Text = $"Games refresh error: {ex.Message}";
+        }
     }
 
     private void EnsureAgentsGridColumns()
@@ -506,27 +524,36 @@ public sealed class LeaderForm : Form
         _agentsGrid.Columns.Add("error", "Last Error");
     }
 
-    private void BuildGamesGridColumns(IEnumerable<AgentInfo> remoteAgents)
+    private void EnsureGamesGridColumns(IEnumerable<AgentInfo> remoteAgents)
     {
-        _gamesGrid.Columns.Clear();
         _gamePcColumnMap.Clear();
 
-        var appIdCol = _gamesGrid.Columns.Add("appId", "App Id");
-        _gamesGrid.Columns[appIdCol].Visible = false;
-        _gamesGrid.Columns.Add("name", "Game");
+        if (_gamesGrid.Columns.Count == 0)
+        {
+            var appIdCol = _gamesGrid.Columns.Add("appId", "App Id");
+            _gamesGrid.Columns[appIdCol].Visible = false;
+            _gamesGrid.Columns.Add("name", "Game");
+        }
 
         foreach (var agent in remoteAgents)
         {
             var columnName = $"pc_{agent.PcId}";
-            var column = new DataGridViewCheckBoxColumn
+            if (!_gamesGrid.Columns.Contains(columnName))
             {
-                Name = columnName,
-                HeaderText = agent.Name,
-                AutoSizeMode = DataGridViewAutoSizeColumnMode.AllCells,
-                TrueValue = true,
-                FalseValue = false
-            };
-            _gamesGrid.Columns.Add(column);
+                var column = new DataGridViewCheckBoxColumn
+                {
+                    Name = columnName,
+                    HeaderText = agent.Name,
+                    AutoSizeMode = DataGridViewAutoSizeColumnMode.AllCells,
+                    TrueValue = true,
+                    FalseValue = false
+                };
+                _gamesGrid.Columns.Add(column);
+            }
+            else
+            {
+                _gamesGrid.Columns[columnName].HeaderText = agent.Name;
+            }
             _gamePcColumnMap[agent.PcId] = columnName;
         }
     }
