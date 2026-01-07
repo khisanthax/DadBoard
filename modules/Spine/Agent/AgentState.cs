@@ -13,4 +13,6 @@ public sealed class AgentState
     public string LastCommandType { get; set; } = "";
     public string LastCommandTs { get; set; } = "";
     public string LastCommandState { get; set; } = "";
+    public string UpdateStatus { get; set; } = "idle";
+    public string UpdateMessage { get; set; } = "";
 }

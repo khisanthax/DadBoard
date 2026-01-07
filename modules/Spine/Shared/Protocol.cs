@@ -12,7 +12,9 @@ public static class ProtocolConstants
     public const string TypeCommandLaunchExe = "Command.LaunchExe";
     public const string TypeCommandShutdownApp = "Command.ShutdownApp";
     public const string TypeCommandScanSteamGames = "Command.ScanSteamGames";
+    public const string TypeCommandUpdateSelf = "Command.UpdateSelf";
     public const string TypeSteamInventory = "SteamInventory";
+    public const string TypeUpdateStatus = "UpdateStatus";
     public const string TypeAck = "Ack";
     public const string TypeStatus = "Status";
 }
@@ -68,6 +70,11 @@ public sealed class ScanSteamGamesCommand
 {
 }
 
+public sealed class UpdateSelfCommand
+{
+    public string? UpdateBaseUrl { get; set; }
+}
+
 public sealed class AckPayload
 {
     public bool Ok { get; set; }
@@ -79,6 +86,12 @@ public sealed class StatusPayload
     public string State { get; set; } = "";
     public string? Message { get; set; }
     public string? GameId { get; set; }
+}
+
+public sealed class UpdateStatusPayload
+{
+    public string Status { get; set; } = "";
+    public string? Message { get; set; }
 }
 
 public sealed class AgentConfig
@@ -96,6 +109,7 @@ public sealed class LeaderConfig
 {
     public int UdpPort { get; set; } = ProtocolConstants.DefaultUdpPort;
     public int WsPortDefault { get; set; } = ProtocolConstants.DefaultWsPort;
+    public int UpdatePort { get; set; } = 39602;
     public int OnlineTimeoutSec { get; set; } = 5;
     public int CommandTimeoutSec { get; set; } = 30;
     public GameDefinition[] Games { get; set; } = Array.Empty<GameDefinition>();
@@ -127,6 +141,12 @@ public sealed class GameInventory
     public string? SteamPath { get; set; }
     public string[]? LibraryPaths { get; set; }
     public int ManifestCount { get; set; }
+}
+
+public sealed class UpdateVersionInfo
+{
+    public string Version { get; set; } = "";
+    public string Sha256 { get; set; } = "";
 }
 
 public sealed class KnownAgentRecord

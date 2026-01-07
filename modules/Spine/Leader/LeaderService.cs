@@ -12,6 +12,10 @@ using System.Threading;
 using Timer = System.Threading.Timer;
 using System.Threading.Tasks;
 using DadBoard.Spine.Shared;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Hosting;
 
 namespace DadBoard.Leader;
 
@@ -54,6 +58,8 @@ public sealed class LeaderService : IDisposable
     private Timer? _stateTimer;
     private Timer? _reconnectTimer;
     private readonly ConcurrentDictionary<string, DateTime> _lastReconnectAttempt = new(StringComparer.OrdinalIgnoreCase);
+    private WebApplication? _updateHost;
+    private Task? _updateHostTask;
 
     public event Action? InventoriesUpdated;
 
@@ -83,6 +89,7 @@ public sealed class LeaderService : IDisposable
         LoadInventoryCaches();
 
         StartDiscovery();
+        StartUpdateHost();
         _offlineTimer = new Timer(_ => UpdateOnlineStates(), null, 0, 1000);
         _persistTimer = new Timer(_ => PersistKnownAgents(), null, 0, 5000);
         _stateTimer = new Timer(_ => PersistState(), null, 0, 1000);
@@ -181,6 +188,7 @@ public sealed class LeaderService : IDisposable
             WsPort = a.WsPort,
             LastSeen = a.LastSeen,
             Online = a.Online,
+            Version = a.Version,
             LastStatus = a.LastStatus,
             LastStatusMessage = a.LastStatusMessage,
             LastCommandId = a.LastCommandId,
@@ -189,7 +197,9 @@ public sealed class LeaderService : IDisposable
             LastAckError = a.LastAckError,
             LastAckTs = a.LastAckTs,
             LastResult = a.LastResult,
-            LastError = a.LastError
+            LastError = a.LastError,
+            UpdateStatus = a.UpdateStatus,
+            UpdateMessage = a.UpdateMessage
         }).OrderBy(a => a.Name, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
@@ -310,6 +320,38 @@ public sealed class LeaderService : IDisposable
         return true;
     }
 
+    public bool SendUpdateCommand(string pcId, out string? error)
+    {
+        error = null;
+        if (!_agents.TryGetValue(pcId, out var agent))
+        {
+            error = "Agent not found.";
+            return false;
+        }
+
+        if (!agent.Online)
+        {
+            error = "Agent is offline.";
+            return false;
+        }
+
+        _ = Task.Run(() => SendUpdateSelf(agent));
+        return true;
+    }
+
+    public void SendUpdateAllOnline()
+    {
+        foreach (var agent in _agents.Values)
+        {
+            if (!agent.Online)
+            {
+                continue;
+            }
+
+            _ = Task.Run(() => SendUpdateSelf(agent));
+        }
+    }
+
     private LeaderConfig LoadConfig()
     {
         if (!File.Exists(_configPath))
@@ -343,6 +385,81 @@ public sealed class LeaderService : IDisposable
         _udp = new UdpClient(_config.UdpPort);
         _ = Task.Run(ReceiveHelloLoop);
         _logger.Info($"Listening for AgentHello on UDP {_config.UdpPort}.");
+    }
+
+    private void StartUpdateHost()
+    {
+        try
+        {
+            var builder = WebApplication.CreateBuilder();
+            builder.WebHost.UseUrls($"http://0.0.0.0:{_config.UpdatePort}");
+            var app = builder.Build();
+
+            app.MapGet("/updates/version.json", () =>
+            {
+                if (!TryGetUpdateFileInfo(out var runtimePath, out var version, out var sha, out var error))
+                {
+                    _logger.Warn($"Update host version.json error: {error}");
+                    return Results.Problem(error, statusCode: StatusCodes.Status404NotFound);
+                }
+
+                return Results.Json(new UpdateVersionInfo
+                {
+                    Version = version,
+                    Sha256 = sha
+                });
+            });
+
+            app.MapGet("/updates/DadBoard.exe", () =>
+            {
+                if (!TryGetUpdateFileInfo(out var runtimePath, out _, out _, out var error))
+                {
+                    _logger.Warn($"Update host DadBoard.exe error: {error}");
+                    return Results.Problem(error, statusCode: StatusCodes.Status404NotFound);
+                }
+
+                return Results.File(runtimePath, "application/octet-stream", "DadBoard.exe");
+            });
+
+            _updateHost = app;
+            _updateHostTask = app.RunAsync(_cts.Token);
+            _logger.Info($"Update host listening on port {_config.UpdatePort}.");
+        }
+        catch (Exception ex)
+        {
+            _logger.Error($"Update host failed to start: {ex.Message}");
+        }
+    }
+
+    private static bool TryGetUpdateFileInfo(out string runtimePath, out string version, out string sha256, out string error)
+    {
+        runtimePath = DadBoardPaths.RuntimeExePath;
+        version = "0.0.0.0";
+        sha256 = "";
+        error = "";
+
+        if (!File.Exists(runtimePath))
+        {
+            runtimePath = DadBoardPaths.InstalledExePath;
+            if (!File.Exists(runtimePath))
+            {
+                error = "DadBoard.exe not found for update.";
+                return false;
+            }
+        }
+
+        try
+        {
+            var info = System.Diagnostics.FileVersionInfo.GetVersionInfo(runtimePath);
+            version = info.FileVersion ?? "0.0.0.0";
+            sha256 = HashUtil.ComputeSha256(runtimePath);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
     }
 
     private async Task ReceiveHelloLoop()
@@ -382,6 +499,7 @@ public sealed class LeaderService : IDisposable
         agent.Name = string.IsNullOrWhiteSpace(hello.Name) ? hello.PcId : hello.Name;
         agent.Ip = string.IsNullOrWhiteSpace(ip) ? hello.Ip : ip;
         agent.WsPort = hello.WsPort > 0 ? hello.WsPort : _config.WsPortDefault;
+        agent.Version = hello.Version ?? "";
         agent.LastSeen = DateTime.UtcNow;
         agent.Online = true;
 
@@ -643,6 +761,41 @@ public sealed class LeaderService : IDisposable
         return ips;
     }
 
+    private string GetUpdateBaseUrl(AgentInfo agent)
+    {
+        var port = _config.UpdatePort;
+        var agentIp = agent.Ip ?? "";
+        var match = _localIps.FirstOrDefault(ip => IsSameSubnet(ip, agentIp));
+        if (string.IsNullOrWhiteSpace(match))
+        {
+            match = _localIps.FirstOrDefault(ip => !string.Equals(ip, "127.0.0.1", StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (string.IsNullOrWhiteSpace(match))
+        {
+            match = "127.0.0.1";
+        }
+
+        return $"http://{match}:{port}";
+    }
+
+    private static bool IsSameSubnet(string ipA, string ipB)
+    {
+        if (!IPAddress.TryParse(ipA, out var a) || !IPAddress.TryParse(ipB, out var b))
+        {
+            return false;
+        }
+
+        if (a.AddressFamily != AddressFamily.InterNetwork || b.AddressFamily != AddressFamily.InterNetwork)
+        {
+            return false;
+        }
+
+        var bytesA = a.GetAddressBytes();
+        var bytesB = b.GetAddressBytes();
+        return bytesA[0] == bytesB[0] && bytesA[1] == bytesB[1] && bytesA[2] == bytesB[2];
+    }
+
     private void StartTimeout(string pcId, string correlationId)
     {
         var key = $"{pcId}:{correlationId}";
@@ -751,6 +904,52 @@ public sealed class LeaderService : IDisposable
         catch (Exception ex)
         {
             _logger.Warn($"ScanSteamGames send failed for {agent.Name}: {ex.Message}");
+        }
+    }
+
+    private async Task SendUpdateSelf(AgentInfo agent)
+    {
+        var connection = await EnsureConnection(agent).ConfigureAwait(false);
+        if (connection == null || connection.Socket.State != WebSocketState.Open)
+        {
+            agent.UpdateStatus = "failed";
+            agent.UpdateMessage = connection?.LastError ?? "Unable to connect";
+            _logger.Warn($"Update command skipped for {agent.Name}: {agent.UpdateMessage}");
+            return;
+        }
+
+        var correlationId = Guid.NewGuid().ToString("N");
+        var baseUrl = GetUpdateBaseUrl(agent);
+        var payload = new UpdateSelfCommand
+        {
+            UpdateBaseUrl = baseUrl
+        };
+
+        var envelope = new
+        {
+            type = ProtocolConstants.TypeCommandUpdateSelf,
+            correlationId,
+            pcId = agent.PcId,
+            payload,
+            ts = DateTime.UtcNow.ToString("O")
+        };
+
+        var json = JsonSerializer.Serialize(envelope, JsonUtil.Options);
+        var buffer = Encoding.UTF8.GetBytes(json);
+
+        agent.UpdateStatus = "sent";
+        agent.UpdateMessage = $"Update requested via {baseUrl}";
+        _logger.Info($"Sending UpdateSelf to pcId={agent.PcId} ip={agent.Ip} ws={agent.WsPort} base={baseUrl} corr={correlationId}");
+
+        try
+        {
+            await connection.Socket.SendAsync(buffer, WebSocketMessageType.Text, true, _cts.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            agent.UpdateStatus = "failed";
+            agent.UpdateMessage = ex.Message;
+            _logger.Warn($"UpdateSelf send failed for {agent.Name}: {ex.Message}");
         }
     }
 
@@ -891,6 +1090,17 @@ public sealed class LeaderService : IDisposable
                 agent.LastStatus = status.State;
                 agent.LastStatusMessage = status.Message ?? "";
                 ApplyResult(agent, status.State, status.Message);
+            }
+            return;
+        }
+
+        if (envelope.Type == ProtocolConstants.TypeUpdateStatus)
+        {
+            var status = envelope.Payload.Deserialize<UpdateStatusPayload>(JsonUtil.Options);
+            if (status != null)
+            {
+                agent.UpdateStatus = status.Status ?? "";
+                agent.UpdateMessage = status.Message ?? "";
             }
         }
     }
@@ -1066,6 +1276,16 @@ public sealed class LeaderService : IDisposable
         _persistTimer?.Dispose();
         _stateTimer?.Dispose();
         _reconnectTimer?.Dispose();
+        if (_updateHost != null)
+        {
+            try
+            {
+                _updateHost.StopAsync().GetAwaiter().GetResult();
+            }
+            catch
+            {
+            }
+        }
         foreach (var connection in _connections.Values)
         {
             connection.Dispose();

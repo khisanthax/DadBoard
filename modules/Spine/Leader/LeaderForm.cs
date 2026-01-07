@@ -37,6 +37,8 @@ public sealed class LeaderForm : Form
     private readonly Button _testButton = new();
     private readonly Button _testMissingButton = new();
     private readonly Button _shutdownButton = new();
+    private readonly Button _updateSelectedButton = new();
+    private readonly Button _updateAllButton = new();
 
     private readonly ContextMenuStrip _rowMenu = new();
     private readonly ToolStripMenuItem _menuLaunch = new("Launch on this PC");
@@ -168,12 +170,24 @@ public sealed class LeaderForm : Form
         _shutdownButton.Enabled = false;
         _shutdownButton.Click += (_, _) => SendShutdownCommand();
 
+        _updateSelectedButton.Text = "Update selected PC";
+        _updateSelectedButton.Height = 32;
+        _updateSelectedButton.Enabled = false;
+        _updateSelectedButton.Click += (_, _) => UpdateSelectedAgent();
+
+        _updateAllButton.Text = "Update all online PCs";
+        _updateAllButton.Height = 32;
+        _updateAllButton.Enabled = true;
+        _updateAllButton.Click += (_, _) => UpdateAllAgents();
+
         actions.Controls.AddRange(new Control[]
         {
             _launchOnSelectedAgentButton,
             _testButton,
             _testMissingButton,
-            _shutdownButton
+            _shutdownButton,
+            _updateSelectedButton,
+            _updateAllButton
         });
 
         panel.Controls.Add(actions, 0, 0);
@@ -406,13 +420,17 @@ public sealed class LeaderForm : Form
                 var resultText = string.IsNullOrWhiteSpace(agent.LastResult) ? "-" : agent.LastResult;
                 var lastError = agent.LastError ?? "";
                 var truncatedError = Truncate(lastError, 60);
+                var version = string.IsNullOrWhiteSpace(agent.Version) ? "-" : agent.Version;
+                var updateStatus = FormatUpdateStatus(agent.UpdateStatus);
 
                 _agentsGrid.Rows.Add(
                     agent.PcId,
                     agent.Ip,
                     agent.Name,
                     onlineText,
+                    version,
                     commandStatus,
+                    updateStatus,
                     ackText,
                     resultText,
                     truncatedError
@@ -420,6 +438,7 @@ public sealed class LeaderForm : Form
 
                 var row = _agentsGrid.Rows[^1];
                 row.Cells["error"].ToolTipText = lastError;
+                row.Cells["update"].ToolTipText = agent.UpdateMessage ?? "";
             }
 
             _agentsGrid.ClearSelection();
@@ -555,7 +574,9 @@ public sealed class LeaderForm : Form
         _agentsGrid.Columns[ipCol].Visible = false;
         _agentsGrid.Columns.Add("name", "PC Name");
         _agentsGrid.Columns.Add("online", "Online");
+        _agentsGrid.Columns.Add("version", "Version");
         _agentsGrid.Columns.Add("command", "Command Status");
+        _agentsGrid.Columns.Add("update", "Update Status");
         _agentsGrid.Columns.Add("ack", "Ack");
         _agentsGrid.Columns.Add("result", "Last Result");
         _agentsGrid.Columns.Add("error", "Last Error");
@@ -783,6 +804,36 @@ public sealed class LeaderForm : Form
         _statusLabel.Text = "Sent shutdown command.";
     }
 
+    private void UpdateSelectedAgent()
+    {
+        var agent = GetSelectedAgentInfo();
+        if (agent == null)
+        {
+            MessageBox.Show("Select an agent row first.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        if (_service.IsLocalAgent(agent.PcId, agent.Ip))
+        {
+            MessageBox.Show("Select a remote agent (not this PC).", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        if (!_service.SendUpdateCommand(agent.PcId, out var error))
+        {
+            MessageBox.Show(error ?? "Unable to send update command.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        _statusLabel.Text = $"Update requested for {agent.Name}.";
+    }
+
+    private void UpdateAllAgents()
+    {
+        _service.SendUpdateAllOnline();
+        _statusLabel.Text = "Update requested for all online PCs.";
+    }
+
     private string? GetSelectedAgentPcId()
     {
         if (_agentsGrid.SelectedRows.Count == 0)
@@ -803,6 +854,18 @@ public sealed class LeaderForm : Form
 
         var row = _agentsGrid.SelectedRows[0];
         return row.Cells["ip"].Value?.ToString();
+    }
+
+    private AgentInfo? GetSelectedAgentInfo()
+    {
+        var pcId = GetSelectedAgentPcId();
+        if (string.IsNullOrWhiteSpace(pcId))
+        {
+            return null;
+        }
+
+        return _service.GetAgentsSnapshot()
+            .FirstOrDefault(agent => string.Equals(agent.PcId, pcId, StringComparison.OrdinalIgnoreCase));
     }
 
     private (int AppId, string Name)? GetSelectedGame()
@@ -1039,6 +1102,8 @@ public sealed class LeaderForm : Form
             _testButton.Enabled = false;
             _testMissingButton.Enabled = false;
             _shutdownButton.Enabled = false;
+            _updateSelectedButton.Enabled = false;
+            _updateAllButton.Enabled = _service.GetAgentsSnapshot().Any(a => a.Online && !_service.IsLocalAgent(a.PcId, a.Ip));
             return;
         }
 
@@ -1050,14 +1115,20 @@ public sealed class LeaderForm : Form
             _testButton.Enabled = false;
             _testMissingButton.Enabled = false;
             _shutdownButton.Enabled = false;
+            _updateSelectedButton.Enabled = false;
+            _updateAllButton.Enabled = _service.GetAgentsSnapshot().Any(a => a.Online && !_service.IsLocalAgent(a.PcId, a.Ip));
             return;
         }
 
         var enabled = !_service.IsLocalAgent(pcId, ip);
+        var selectedAgent = GetSelectedAgentInfo();
+        var online = selectedAgent?.Online ?? false;
         _launchOnSelectedAgentButton.Enabled = GetSelectedGame() != null;
         _testButton.Enabled = enabled;
         _testMissingButton.Enabled = enabled;
         _shutdownButton.Enabled = enabled;
+        _updateSelectedButton.Enabled = enabled && online;
+        _updateAllButton.Enabled = _service.GetAgentsSnapshot().Any(a => a.Online && !_service.IsLocalAgent(a.PcId, a.Ip));
     }
 
     private void UpdateGameActions()
@@ -1184,6 +1255,24 @@ public sealed class LeaderForm : Form
             "launching" => "Running",
             "stopping" => "Running",
             _ => "Idle"
+        };
+    }
+
+    private static string FormatUpdateStatus(string status)
+    {
+        if (string.IsNullOrWhiteSpace(status))
+        {
+            return "Idle";
+        }
+
+        return status.ToLowerInvariant() switch
+        {
+            "downloading" => "Downloading",
+            "applying" => "Applying",
+            "restarting" => "Restarting",
+            "failed" => "Failed",
+            "sent" => "Sent",
+            _ => status
         };
     }
 

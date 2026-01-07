@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
+using System.Net.Http;
 using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Security.Principal;
@@ -33,6 +34,7 @@ public sealed class AgentService : IDisposable
     private UdpClient? _udp;
     private WebApplication? _webApp;
     private Task? _webAppTask;
+    private readonly HttpClient _httpClient = new();
 
     private readonly ConcurrentDictionary<WebSocket, DateTime> _clients = new();
     private Timer? _helloTimer;
@@ -179,6 +181,7 @@ public sealed class AgentService : IDisposable
                 var socket = await context.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
                 _clients[socket] = DateTime.UtcNow;
                 _logger.Info("Leader connected via WebSocket.");
+                SendUpdateStatusToSocket(socket);
                 await ReceiveLoop(socket).ConfigureAwait(false);
             });
 
@@ -299,6 +302,23 @@ public sealed class AgentService : IDisposable
             return;
         }
 
+        if (envelope.Type == ProtocolConstants.TypeCommandUpdateSelf)
+        {
+            var command = envelope.Payload.Deserialize<UpdateSelfCommand>(JsonUtil.Options);
+            if (command == null)
+            {
+                SendAck(socket, envelope.CorrelationId, ok: false, "Invalid payload");
+                return;
+            }
+
+            _state.LastCommandId = envelope.CorrelationId;
+            _state.LastCommandType = envelope.Type;
+            _state.LastCommandTs = DateTime.UtcNow.ToString("O");
+
+            _ = Task.Run(() => ExecuteUpdateSelf(envelope.CorrelationId, command, socket));
+            return;
+        }
+
         SendAck(socket, envelope.CorrelationId, ok: false, "Unknown command");
     }
 
@@ -415,6 +435,136 @@ public sealed class AgentService : IDisposable
             SendStatus(correlationId, "failed", null, message);
             _logger.Error($"LaunchExe failed corr={correlationId}: {ex.Message}");
         }
+    }
+
+    private async Task ExecuteUpdateSelf(string correlationId, UpdateSelfCommand command, WebSocket socket)
+    {
+        SendAck(socket, correlationId, ok: true, null);
+
+        if (string.IsNullOrWhiteSpace(command.UpdateBaseUrl))
+        {
+            SendUpdateStatus("failed", "Missing update base URL.");
+            _logger.Warn($"UpdateSelf failed corr={correlationId}: missing update base URL.");
+            return;
+        }
+
+        var baseUrl = command.UpdateBaseUrl.TrimEnd('/');
+        var versionUrl = $"{baseUrl}/updates/version.json";
+        var exeUrl = $"{baseUrl}/updates/DadBoard.exe";
+
+        try
+        {
+            SendUpdateStatus("downloading", "Downloading update.");
+            _logger.Info($"UpdateSelf downloading from {baseUrl} corr={correlationId}.");
+
+            Directory.CreateDirectory(DadBoardPaths.UpdatesDir);
+
+            var versionJson = await _httpClient.GetStringAsync(versionUrl).ConfigureAwait(false);
+            var versionInfo = JsonSerializer.Deserialize<UpdateVersionInfo>(versionJson, JsonUtil.Options);
+            if (versionInfo == null || string.IsNullOrWhiteSpace(versionInfo.Sha256))
+            {
+                SendUpdateStatus("failed", "Invalid update metadata.");
+                _logger.Warn($"UpdateSelf invalid metadata corr={correlationId}.");
+                return;
+            }
+
+            await DownloadFileAsync(exeUrl, DadBoardPaths.UpdateNewExePath).ConfigureAwait(false);
+            var actualSha = HashUtil.ComputeSha256(DadBoardPaths.UpdateNewExePath);
+            if (!string.Equals(actualSha, versionInfo.Sha256, StringComparison.OrdinalIgnoreCase))
+            {
+                SendUpdateStatus("failed", "SHA256 mismatch.");
+                _logger.Warn($"UpdateSelf sha mismatch corr={correlationId} expected={versionInfo.Sha256} actual={actualSha}");
+                return;
+            }
+
+            SendUpdateStatus("applying", "Applying update.");
+            if (!LaunchBootstrapperForUpdate(DadBoardPaths.UpdateNewExePath))
+            {
+                SendUpdateStatus("failed", "Failed to launch bootstrapper.");
+                return;
+            }
+
+            SendUpdateStatus("restarting", "Restarting for update.");
+            _logger.Info("UpdateSelf restarting via bootstrapper.");
+            ShutdownRequested?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            SendUpdateStatus("failed", ex.Message);
+            _logger.Error($"UpdateSelf failed corr={correlationId}: {ex}");
+        }
+    }
+
+    private async Task DownloadFileAsync(string url, string path)
+    {
+        using var response = await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        await using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+        await using var file = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
+        await stream.CopyToAsync(file).ConfigureAwait(false);
+    }
+
+    private bool LaunchBootstrapperForUpdate(string newExePath)
+    {
+        var bootstrapper = DadBoardPaths.InstalledExePath;
+        if (!File.Exists(bootstrapper))
+        {
+            _logger.Error($"UpdateSelf bootstrapper not found at {bootstrapper}.");
+            return false;
+        }
+
+        var args = $"--apply-update \"{newExePath}\" --wait-pid {Process.GetCurrentProcess().Id} --mode agent --minimized";
+        try
+        {
+            var startInfo = new ProcessStartInfo(bootstrapper, args)
+            {
+                UseShellExecute = true
+            };
+            var process = Process.Start(startInfo);
+            if (process == null)
+            {
+                _logger.Error("UpdateSelf failed to start bootstrapper process.");
+                return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.Error($"UpdateSelf failed to launch bootstrapper: {ex.Message}");
+            return false;
+        }
+
+        return true;
+    }
+
+    private void SendUpdateStatus(string status, string? message)
+    {
+        _state.UpdateStatus = status;
+        _state.UpdateMessage = message ?? "";
+        var payload = new UpdateStatusPayload
+        {
+            Status = status,
+            Message = message
+        };
+
+        foreach (var socket in _clients.Keys)
+        {
+            if (socket.State != WebSocketState.Open)
+            {
+                continue;
+            }
+
+            SendEnvelope(socket, ProtocolConstants.TypeUpdateStatus, "", payload);
+        }
+    }
+
+    private void SendUpdateStatusToSocket(WebSocket socket)
+    {
+        var payload = new UpdateStatusPayload
+        {
+            Status = _state.UpdateStatus,
+            Message = _state.UpdateMessage
+        };
+        SendEnvelope(socket, ProtocolConstants.TypeUpdateStatus, "", payload);
     }
 
     private Task ExecuteShutdown(string correlationId, ShutdownAppCommand command, WebSocket socket)
@@ -541,7 +691,7 @@ public sealed class AgentService : IDisposable
             Name = _config.DisplayName,
             Ip = GetLocalIp(),
             WsPort = _config.WsPort,
-            Version = _config.Version,
+            Version = GetAppVersion(),
             Ts = DateTime.UtcNow.ToString("O")
         };
 
@@ -584,6 +734,7 @@ public sealed class AgentService : IDisposable
         _cts.Cancel();
         _helloTimer?.Dispose();
         _stateTimer?.Dispose();
+        _httpClient.Dispose();
         if (_webApp != null)
         {
             try
@@ -595,5 +746,24 @@ public sealed class AgentService : IDisposable
             }
         }
         _udp?.Dispose();
+    }
+
+    private static string GetAppVersion()
+    {
+        try
+        {
+            var path = Process.GetCurrentProcess().MainModule?.FileName;
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return "0.0.0.0";
+            }
+
+            var info = FileVersionInfo.GetVersionInfo(path);
+            return info.FileVersion ?? "0.0.0.0";
+        }
+        catch
+        {
+            return "0.0.0.0";
+        }
     }
 }

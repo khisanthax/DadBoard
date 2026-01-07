@@ -19,7 +19,7 @@ static class Installer
 
     public static string GetInstalledExePath()
     {
-        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "DadBoard", "DadBoard.exe");
+        return DadBoardPaths.InstalledExePath;
     }
 
     public static InstallSession CreateInstallSession()
@@ -157,10 +157,8 @@ static class Installer
             throw new InvalidOperationException("Unable to determine executable path.");
         }
 
-        var installDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "DadBoard");
-        Directory.CreateDirectory(installDir);
-        var installExe = Path.Combine(installDir, "DadBoard.exe");
-        File.Copy(exePath, installExe, true);
+        Directory.CreateDirectory(DadBoardPaths.ProgramFilesDir);
+        File.Copy(exePath, DadBoardPaths.InstalledExePath, true);
     }
 
     private static void StopOtherInstances(InstallLogger logger, int? installerParentPid)
