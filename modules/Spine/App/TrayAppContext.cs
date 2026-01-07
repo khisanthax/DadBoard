@@ -27,6 +27,7 @@ sealed class TrayAppContext : ApplicationContext
     private readonly NotifyIcon _tray;
     private readonly ToolStripMenuItem _enableLeaderItem;
     private readonly ToolStripMenuItem _disableLeaderItem;
+    private readonly ToolStripMenuItem _openDashboardItem;
     private readonly ToolStripMenuItem _startLeaderOnLoginItem;
     private readonly ToolStripMenuItem _installItem;
     private readonly ToolStripMenuItem _statusItem;
@@ -55,6 +56,7 @@ sealed class TrayAppContext : ApplicationContext
 
         _enableLeaderItem = new ToolStripMenuItem("Enable Leader", null, (_, _) => EnableLeader(showUI: true));
         _disableLeaderItem = new ToolStripMenuItem("Disable Leader", null, (_, _) => DisableLeader());
+        _openDashboardItem = new ToolStripMenuItem("Open Dashboard", null, (_, _) => ShowLeaderUI());
         _startLeaderOnLoginItem = new ToolStripMenuItem("Start Leader on Login") { CheckOnClick = true };
         _startLeaderOnLoginItem.Checked = _config.StartLeaderOnLogin;
         _startLeaderOnLoginItem.CheckedChanged += (_, _) => ToggleStartLeaderOnLogin();
@@ -65,6 +67,7 @@ sealed class TrayAppContext : ApplicationContext
         var menu = new ContextMenuStrip();
         menu.Items.AddRange(new ToolStripItem[]
         {
+            _openDashboardItem,
             _enableLeaderItem,
             _disableLeaderItem,
             new ToolStripSeparator(),
@@ -82,7 +85,17 @@ sealed class TrayAppContext : ApplicationContext
             Visible = true,
             ContextMenuStrip = menu
         };
-        _tray.DoubleClick += (_, _) => ShowStatus();
+        _tray.DoubleClick += (_, _) =>
+        {
+            if (_leader != null)
+            {
+                ShowLeaderUI();
+            }
+            else
+            {
+                ShowStatus();
+            }
+        };
         SignalTrayReadyWhenReady();
 
         if (_options.Mode == AppMode.Leader || (_options.Mode != AppMode.Agent && _config.StartLeaderOnLogin))
@@ -237,6 +250,7 @@ sealed class TrayAppContext : ApplicationContext
         var leaderEnabled = _leader != null;
         _enableLeaderItem.Enabled = !leaderEnabled;
         _disableLeaderItem.Enabled = leaderEnabled;
+        _openDashboardItem.Enabled = leaderEnabled;
         var installed = Installer.IsInstalled();
         _installItem.Text = installed ? "Reinstall (Admin)" : "Install (Admin)";
         _installItem.Enabled = true;
@@ -245,7 +259,9 @@ sealed class TrayAppContext : ApplicationContext
     private void Exit()
     {
         _tray.Visible = false;
+        _leaderForm?.AllowClose();
         _leaderForm?.Close();
+        _statusForm?.Close();
         _leader?.Dispose();
         Dispose();
         ExitThread();
