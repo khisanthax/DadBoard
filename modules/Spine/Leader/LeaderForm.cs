@@ -16,6 +16,7 @@ public sealed class LeaderForm : Form
     private readonly System.Windows.Forms.Timer _refreshTimer = new();
     private readonly EventHandler _refreshHandler;
     private readonly Button _testButton = new();
+    private readonly Button _testMissingButton = new();
     private bool _allowClose;
 
     public LeaderForm(LeaderService service)
@@ -58,11 +59,12 @@ public sealed class LeaderForm : Form
         var panel = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            RowCount = 4,
+            RowCount = 5,
             ColumnCount = 1
         };
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
@@ -86,6 +88,13 @@ public sealed class LeaderForm : Form
         _testButton.Enabled = false;
         _testButton.Click += (_, _) => SendTestCommand();
         panel.Controls.Add(_testButton, 0, 3);
+
+        _testMissingButton.Text = "Test: Missing helpme.exe";
+        _testMissingButton.Dock = DockStyle.Top;
+        _testMissingButton.Height = 32;
+        _testMissingButton.Enabled = false;
+        _testMissingButton.Click += (_, _) => SendMissingExeTest();
+        panel.Controls.Add(_testMissingButton, 0, 4);
 
         return panel;
     }
@@ -156,7 +165,9 @@ public sealed class LeaderForm : Form
         }
 
         UpdateTestButtonState();
-        _statusLabel.Text = $"Agents online: {snapshot.Count(a => a.Online)} / {snapshot.Count}";
+        var onlineSummary = $"Agents online: {snapshot.Count(a => a.Online)} / {snapshot.Count}";
+        var selectedFailure = GetSelectedFailureMessage();
+        _statusLabel.Text = string.IsNullOrWhiteSpace(selectedFailure) ? onlineSummary : selectedFailure;
     }
 
     private void EnsureGridColumns()
@@ -240,6 +251,7 @@ public sealed class LeaderForm : Form
         if (_grid.SelectedRows.Count == 0)
         {
             _testButton.Enabled = false;
+            _testMissingButton.Enabled = false;
             return;
         }
 
@@ -248,10 +260,57 @@ public sealed class LeaderForm : Form
         if (string.IsNullOrWhiteSpace(pcId) || string.IsNullOrWhiteSpace(ip))
         {
             _testButton.Enabled = false;
+            _testMissingButton.Enabled = false;
             return;
         }
 
-        _testButton.Enabled = !_service.IsLocalAgent(pcId, ip);
+        var enabled = !_service.IsLocalAgent(pcId, ip);
+        _testButton.Enabled = enabled;
+        _testMissingButton.Enabled = enabled;
+    }
+
+    private void SendMissingExeTest()
+    {
+        var pcId = GetSelectedAgentPcId();
+        var ip = GetSelectedAgentIp();
+        if (string.IsNullOrWhiteSpace(pcId) || string.IsNullOrWhiteSpace(ip))
+        {
+            MessageBox.Show("Select an agent row first.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        if (_service.IsLocalAgent(pcId, ip))
+        {
+            MessageBox.Show("Select a remote agent (not this PC).", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        if (!_service.SendTestCommand(pcId, "helpme.exe", out var error))
+        {
+            MessageBox.Show(error ?? "Unable to send test command.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        _statusLabel.Text = "Sent test command: helpme.exe";
+    }
+
+    private string? GetSelectedFailureMessage()
+    {
+        if (_grid.SelectedRows.Count == 0)
+        {
+            return null;
+        }
+
+        var row = _grid.SelectedRows[0];
+        var status = row.Cells["status"].Value?.ToString();
+        var message = row.Cells["message"].Value?.ToString();
+        if (string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(message))
+        {
+            return $"Selected failed: {message}";
+        }
+
+        return null;
     }
 
     public void AllowClose()

@@ -330,14 +330,19 @@ public sealed class AgentService : IDisposable
             SendStatus(correlationId, "launching", null, $"Launching {command.ExePath}.");
             var startInfo = new ProcessStartInfo(command.ExePath) { UseShellExecute = true };
             _logger.Info($"LaunchExe starting corr={correlationId} exe={startInfo.FileName} shell={startInfo.UseShellExecute}.");
-            Process.Start(startInfo);
+            var process = Process.Start(startInfo);
+            if (process == null)
+            {
+                throw new InvalidOperationException("Process start returned null.");
+            }
             await Task.Delay(500, _cts.Token).ConfigureAwait(false);
             SendStatus(correlationId, "running", null, "Process started.");
             _logger.Info($"LaunchExe running corr={correlationId}.");
         }
         catch (Exception ex)
         {
-            SendStatus(correlationId, "failed", null, ex.Message);
+            var message = $"LaunchExe failed: {ex.Message}";
+            SendStatus(correlationId, "failed", null, message);
             _logger.Error($"LaunchExe failed corr={correlationId}: {ex.Message}");
         }
     }

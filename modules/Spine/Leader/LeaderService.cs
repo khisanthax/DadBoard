@@ -130,6 +130,11 @@ public sealed class LeaderService : IDisposable
 
     public bool SendTestCommand(string pcId, out string? error)
     {
+        return SendTestCommand(pcId, "notepad.exe", out error);
+    }
+
+    public bool SendTestCommand(string pcId, string exePath, out string? error)
+    {
         error = null;
         if (!_agents.TryGetValue(pcId, out var agent))
         {
@@ -143,7 +148,7 @@ public sealed class LeaderService : IDisposable
             return false;
         }
 
-        _ = Task.Run(() => SendLaunchExe(agent, "notepad.exe"));
+        _ = Task.Run(() => SendLaunchExe(agent, exePath));
         return true;
     }
 
