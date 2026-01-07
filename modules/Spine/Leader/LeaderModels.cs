@@ -18,6 +18,8 @@ public sealed class AgentInfo
     public bool LastAckOk { get; set; }
     public string LastAckError { get; set; } = "";
     public DateTime LastAckTs { get; set; }
+    public string LastResult { get; set; } = "";
+    public string LastError { get; set; } = "";
 }
 
 public sealed class ConnectionInfo

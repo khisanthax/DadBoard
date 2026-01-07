@@ -41,6 +41,8 @@ public sealed class LeaderService : IDisposable
     private Timer? _offlineTimer;
     private Timer? _persistTimer;
     private Timer? _stateTimer;
+    private Timer? _reconnectTimer;
+    private readonly ConcurrentDictionary<string, DateTime> _lastReconnectAttempt = new(StringComparer.OrdinalIgnoreCase);
 
     public LeaderService(string? baseDir = null)
     {
@@ -66,6 +68,7 @@ public sealed class LeaderService : IDisposable
         _offlineTimer = new Timer(_ => UpdateOnlineStates(), null, 0, 1000);
         _persistTimer = new Timer(_ => PersistKnownAgents(), null, 0, 5000);
         _stateTimer = new Timer(_ => PersistState(), null, 0, 1000);
+        _reconnectTimer = new Timer(_ => TryReconnectOnlineAgents(), null, 0, 2000);
     }
 
     public LeaderConfig Config => _config;
@@ -99,7 +102,9 @@ public sealed class LeaderService : IDisposable
             LastCommandTs = a.LastCommandTs,
             LastAckOk = a.LastAckOk,
             LastAckError = a.LastAckError,
-            LastAckTs = a.LastAckTs
+            LastAckTs = a.LastAckTs,
+            LastResult = a.LastResult,
+            LastError = a.LastError
         }).OrderBy(a => a.Name, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
@@ -126,6 +131,25 @@ public sealed class LeaderService : IDisposable
 
             _ = Task.Run(() => SendLaunchCommand(agent, game));
         }
+    }
+
+    public bool LaunchOnAgent(GameDefinition game, string pcId, out string? error)
+    {
+        error = null;
+        if (!_agents.TryGetValue(pcId, out var agent))
+        {
+            error = "Agent not found.";
+            return false;
+        }
+
+        if (!agent.Online)
+        {
+            error = "Agent is offline.";
+            return false;
+        }
+
+        _ = Task.Run(() => SendLaunchCommand(agent, game));
+        return true;
     }
 
     public bool SendTestCommand(string pcId, out string? error)
@@ -259,6 +283,32 @@ public sealed class LeaderService : IDisposable
         }
     }
 
+    private void TryReconnectOnlineAgents()
+    {
+        foreach (var agent in _agents.Values)
+        {
+            if (!agent.Online)
+            {
+                continue;
+            }
+
+            if (_connections.TryGetValue(agent.PcId, out var connection) &&
+                connection.Socket.State == WebSocketState.Open)
+            {
+                continue;
+            }
+
+            var lastAttempt = _lastReconnectAttempt.GetOrAdd(agent.PcId, _ => DateTime.MinValue);
+            if ((DateTime.UtcNow - lastAttempt).TotalSeconds < 2)
+            {
+                continue;
+            }
+
+            _lastReconnectAttempt[agent.PcId] = DateTime.UtcNow;
+            _ = Task.Run(() => EnsureConnection(agent));
+        }
+    }
+
     private async Task SendLaunchCommand(AgentInfo agent, GameDefinition game)
     {
         var connection = await EnsureConnection(agent).ConfigureAwait(false);
@@ -266,6 +316,8 @@ public sealed class LeaderService : IDisposable
         {
             agent.LastStatus = "ws_error";
             agent.LastStatusMessage = connection?.LastError ?? "Unable to connect";
+            agent.LastResult = "Failed";
+            agent.LastError = agent.LastStatusMessage;
             return;
         }
 
@@ -295,6 +347,8 @@ public sealed class LeaderService : IDisposable
         agent.LastCommandTs = DateTime.UtcNow;
         agent.LastStatus = "sent";
         agent.LastStatusMessage = $"Sent {game.Name}";
+        agent.LastResult = "Pending";
+        agent.LastError = "";
         StartTimeout(agent.PcId, correlationId);
 
         try
@@ -305,6 +359,8 @@ public sealed class LeaderService : IDisposable
         {
             agent.LastStatus = "failed";
             agent.LastStatusMessage = ex.Message;
+            agent.LastResult = "Failed";
+            agent.LastError = ex.Message;
         }
     }
 
@@ -315,6 +371,8 @@ public sealed class LeaderService : IDisposable
         {
             agent.LastStatus = "ws_error";
             agent.LastStatusMessage = connection?.LastError ?? "Unable to connect";
+            agent.LastResult = "Failed";
+            agent.LastError = agent.LastStatusMessage;
             return;
         }
 
@@ -340,6 +398,8 @@ public sealed class LeaderService : IDisposable
         agent.LastCommandTs = DateTime.UtcNow;
         agent.LastStatus = "sent";
         agent.LastStatusMessage = $"Sent {exePath}";
+        agent.LastResult = "Pending";
+        agent.LastError = "";
         StartTimeout(agent.PcId, correlationId);
         _logger.Info($"Sending LaunchExe to pcId={agent.PcId} ip={agent.Ip} ws={agent.WsPort} exe={exePath} corr={correlationId}");
 
@@ -351,6 +411,8 @@ public sealed class LeaderService : IDisposable
         {
             agent.LastStatus = "failed";
             agent.LastStatusMessage = ex.Message;
+            agent.LastResult = "Failed";
+            agent.LastError = ex.Message;
         }
     }
 
@@ -419,6 +481,8 @@ public sealed class LeaderService : IDisposable
                 {
                     agent.LastStatus = "timeout";
                     agent.LastStatusMessage = "Command timeout.";
+                    agent.LastResult = "Timed out";
+                    agent.LastError = agent.LastStatusMessage;
                 }
             }
         }, null, TimeSpan.FromSeconds(_config.CommandTimeoutSec), Timeout.InfiniteTimeSpan);
@@ -433,6 +497,8 @@ public sealed class LeaderService : IDisposable
         {
             agent.LastStatus = "ws_error";
             agent.LastStatusMessage = connection?.LastError ?? "Unable to connect";
+            agent.LastResult = "Failed";
+            agent.LastError = agent.LastStatusMessage;
             return;
         }
 
@@ -458,6 +524,8 @@ public sealed class LeaderService : IDisposable
         agent.LastCommandTs = DateTime.UtcNow;
         agent.LastStatus = "sent";
         agent.LastStatusMessage = "Sent shutdown command";
+        agent.LastResult = "Pending";
+        agent.LastError = "";
         StartTimeout(agent.PcId, correlationId);
         _logger.Info($"Sending ShutdownApp to pcId={agent.PcId} ip={agent.Ip} ws={agent.WsPort} corr={correlationId}");
 
@@ -469,6 +537,8 @@ public sealed class LeaderService : IDisposable
         {
             agent.LastStatus = "failed";
             agent.LastStatusMessage = ex.Message;
+            agent.LastResult = "Failed";
+            agent.LastError = ex.Message;
         }
     }
 
@@ -554,6 +624,8 @@ public sealed class LeaderService : IDisposable
             {
                 agent.LastStatus = "failed";
                 agent.LastStatusMessage = ack?.ErrorMessage ?? "Ack failed";
+                agent.LastResult = "Failed";
+                agent.LastError = agent.LastStatusMessage;
             }
             return;
         }
@@ -565,7 +637,31 @@ public sealed class LeaderService : IDisposable
             {
                 agent.LastStatus = status.State;
                 agent.LastStatusMessage = status.Message ?? "";
+                ApplyResult(agent, status.State, status.Message);
             }
+        }
+    }
+
+    private static void ApplyResult(AgentInfo agent, string state, string? message)
+    {
+        if (string.Equals(state, "running", StringComparison.OrdinalIgnoreCase))
+        {
+            agent.LastResult = "Success";
+            agent.LastError = "";
+            return;
+        }
+
+        if (string.Equals(state, "failed", StringComparison.OrdinalIgnoreCase))
+        {
+            agent.LastResult = "Failed";
+            agent.LastError = message ?? "";
+            return;
+        }
+
+        if (string.Equals(state, "timeout", StringComparison.OrdinalIgnoreCase))
+        {
+            agent.LastResult = "Timed out";
+            agent.LastError = message ?? "Command timeout.";
         }
     }
 
@@ -610,6 +706,7 @@ public sealed class LeaderService : IDisposable
         _offlineTimer?.Dispose();
         _persistTimer?.Dispose();
         _stateTimer?.Dispose();
+        _reconnectTimer?.Dispose();
         foreach (var connection in _connections.Values)
         {
             connection.Dispose();

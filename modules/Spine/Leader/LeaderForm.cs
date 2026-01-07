@@ -15,9 +15,17 @@ public sealed class LeaderForm : Form
     private readonly Label _statusLabel = new();
     private readonly System.Windows.Forms.Timer _refreshTimer = new();
     private readonly EventHandler _refreshHandler;
+    private readonly Button _launchSelectedButton = new();
     private readonly Button _testButton = new();
     private readonly Button _testMissingButton = new();
     private readonly Button _shutdownButton = new();
+    private readonly ContextMenuStrip _rowMenu = new();
+    private readonly ToolStripMenuItem _menuLaunch = new("Launch on this PC");
+    private readonly ToolStripMenuItem _menuTest = new("Test: Open Notepad");
+    private readonly ToolStripMenuItem _menuCopyPcId = new("Copy PC ID");
+    private readonly ToolStripMenuItem _menuCopyIp = new("Copy IP");
+    private readonly ToolStripMenuItem _menuViewError = new("View last error");
+    private int _refreshing;
     private bool _allowClose;
 
     public LeaderForm(LeaderService service)
@@ -48,9 +56,19 @@ public sealed class LeaderForm : Form
         _refreshTimer.Interval = 1000;
         _refreshHandler = (_, _) => RefreshGridSafe();
         _refreshTimer.Tick += _refreshHandler;
-        _refreshTimer.Start();
 
-        Load += (_, _) => RefreshGridSafe();
+        Shown += (_, _) => StartRefresh();
+        VisibleChanged += (_, _) =>
+        {
+            if (Visible)
+            {
+                StartRefresh();
+            }
+            else
+            {
+                StopRefresh();
+            }
+        };
         FormClosing += OnFormClosing;
         FormClosed += OnFormClosed;
     }
@@ -60,11 +78,12 @@ public sealed class LeaderForm : Form
         var panel = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            RowCount = 6,
+            RowCount = 7,
             ColumnCount = 1
         };
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -78,32 +97,40 @@ public sealed class LeaderForm : Form
         {
             _gameList.Items.Add(game);
         }
+        _gameList.SelectedIndexChanged += (_, _) => UpdateActionButtons();
         panel.Controls.Add(_gameList, 0, 1);
+
+        _launchSelectedButton.Text = "Launch on Selected PC";
+        _launchSelectedButton.Dock = DockStyle.Top;
+        _launchSelectedButton.Height = 32;
+        _launchSelectedButton.Enabled = false;
+        _launchSelectedButton.Click += (_, _) => LaunchSelectedPc();
+        panel.Controls.Add(_launchSelectedButton, 0, 2);
 
         var button = new Button { Text = "Launch on all", Dock = DockStyle.Top, Height = 32 };
         button.Click += (_, _) => LaunchSelected();
-        panel.Controls.Add(button, 0, 2);
+        panel.Controls.Add(button, 0, 3);
 
         _testButton.Text = "Test: Open Notepad";
         _testButton.Dock = DockStyle.Top;
         _testButton.Height = 32;
         _testButton.Enabled = false;
         _testButton.Click += (_, _) => SendTestCommand();
-        panel.Controls.Add(_testButton, 0, 3);
+        panel.Controls.Add(_testButton, 0, 4);
 
         _testMissingButton.Text = "Test: Missing helpme.exe";
         _testMissingButton.Dock = DockStyle.Top;
         _testMissingButton.Height = 32;
         _testMissingButton.Enabled = false;
         _testMissingButton.Click += (_, _) => SendMissingExeTest();
-        panel.Controls.Add(_testMissingButton, 0, 4);
+        panel.Controls.Add(_testMissingButton, 0, 5);
 
         _shutdownButton.Text = "Close Remote DadBoard";
         _shutdownButton.Dock = DockStyle.Top;
         _shutdownButton.Height = 32;
         _shutdownButton.Enabled = false;
         _shutdownButton.Click += (_, _) => SendShutdownCommand();
-        panel.Controls.Add(_shutdownButton, 0, 5);
+        panel.Controls.Add(_shutdownButton, 0, 6);
 
         return panel;
     }
@@ -118,7 +145,34 @@ public sealed class LeaderForm : Form
         _grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
         _grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
         _grid.MultiSelect = false;
-        _grid.SelectionChanged += (_, _) => UpdateTestButtonState();
+        _grid.SelectionChanged += (_, _) => UpdateActionButtons();
+        _grid.MouseDown += GridMouseDown;
+        _grid.ContextMenuStrip = _rowMenu;
+
+        _rowMenu.Items.AddRange(new ToolStripItem[]
+        {
+            _menuLaunch,
+            _menuTest,
+            new ToolStripSeparator(),
+            _menuCopyPcId,
+            _menuCopyIp,
+            _menuViewError
+        });
+        _rowMenu.Opening += (_, e) =>
+        {
+            if (_grid.SelectedRows.Count != 1)
+            {
+                e.Cancel = true;
+                return;
+            }
+
+            UpdateContextMenuState();
+        };
+        _menuLaunch.Click += (_, _) => LaunchSelectedPc();
+        _menuTest.Click += (_, _) => SendTestCommand();
+        _menuCopyPcId.Click += (_, _) => CopySelectedValue("pcId");
+        _menuCopyIp.Click += (_, _) => CopySelectedValue("ip");
+        _menuViewError.Click += (_, _) => ShowSelectedError();
 
         EnsureGridColumns();
 
@@ -138,6 +192,13 @@ public sealed class LeaderForm : Form
             return;
         }
 
+        if (System.Threading.Interlocked.Exchange(ref _refreshing, 1) == 1)
+        {
+            return;
+        }
+
+        try
+        {
         if (_grid.Columns.Count == 0)
         {
             EnsureGridColumns();
@@ -149,15 +210,26 @@ public sealed class LeaderForm : Form
 
         foreach (var agent in snapshot)
         {
+            var onlineText = FormatOnline(agent.Online, agent.LastSeen);
+            var commandStatus = FormatCommandStatus(agent.LastStatus);
+            var ackText = FormatAck(agent.LastAckTs, agent.LastAckOk, agent.LastAckError);
+            var resultText = string.IsNullOrWhiteSpace(agent.LastResult) ? "-" : agent.LastResult;
+            var lastError = agent.LastError ?? "";
+            var truncatedError = Truncate(lastError, 60);
+
             _grid.Rows.Add(
                 agent.PcId,
-                agent.Name,
                 agent.Ip,
-                agent.Online ? "Yes" : "No",
-                agent.LastSeen == default ? "-" : agent.LastSeen.ToLocalTime().ToString("HH:mm:ss"),
-                agent.LastStatus,
-                agent.LastStatusMessage
+                agent.Name,
+                onlineText,
+                commandStatus,
+                ackText,
+                resultText,
+                truncatedError
             );
+
+            var row = _grid.Rows[^1];
+            row.Cells["error"].ToolTipText = lastError;
         }
 
         _grid.ClearSelection();
@@ -173,10 +245,15 @@ public sealed class LeaderForm : Form
             }
         }
 
-        UpdateTestButtonState();
+        UpdateActionButtons();
         var onlineSummary = $"Agents online: {snapshot.Count(a => a.Online)} / {snapshot.Count}";
         var selectedFailure = GetSelectedFailureMessage();
         _statusLabel.Text = string.IsNullOrWhiteSpace(selectedFailure) ? onlineSummary : selectedFailure;
+        }
+        finally
+        {
+            System.Threading.Interlocked.Exchange(ref _refreshing, 0);
+        }
     }
 
     private void EnsureGridColumns()
@@ -188,12 +265,14 @@ public sealed class LeaderForm : Form
 
         var pcIdCol = _grid.Columns.Add("pcId", "PC Id");
         _grid.Columns[pcIdCol].Visible = false;
-        _grid.Columns.Add("name", "PC");
-        _grid.Columns.Add("ip", "IP");
+        var ipCol = _grid.Columns.Add("ip", "IP");
+        _grid.Columns[ipCol].Visible = false;
+        _grid.Columns.Add("name", "PC Name");
         _grid.Columns.Add("online", "Online");
-        _grid.Columns.Add("lastSeen", "Last Seen");
-        _grid.Columns.Add("status", "Status");
-        _grid.Columns.Add("message", "Message");
+        _grid.Columns.Add("command", "Command Status");
+        _grid.Columns.Add("ack", "Ack");
+        _grid.Columns.Add("result", "Last Result");
+        _grid.Columns.Add("error", "Last Error");
     }
 
     private void LaunchSelected()
@@ -206,6 +285,30 @@ public sealed class LeaderForm : Form
 
         _service.LaunchOnAll(game);
         _statusLabel.Text = $"Launch triggered: {game.Name}";
+    }
+
+    private void LaunchSelectedPc()
+    {
+        if (_gameList.SelectedItem is not GameDefinition game)
+        {
+            MessageBox.Show("Select a game first.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        var pcId = GetSelectedAgentPcId();
+        if (string.IsNullOrWhiteSpace(pcId))
+        {
+            MessageBox.Show("Select an agent row first.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        if (!_service.LaunchOnAgent(game, pcId, out var error))
+        {
+            MessageBox.Show(error ?? "Unable to launch on selected PC.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        _statusLabel.Text = $"Launch triggered: {game.Name} (selected PC)";
     }
 
     private void SendTestCommand()
@@ -255,10 +358,11 @@ public sealed class LeaderForm : Form
         return row.Cells["ip"].Value?.ToString();
     }
 
-    private void UpdateTestButtonState()
+    private void UpdateActionButtons()
     {
         if (_grid.SelectedRows.Count == 0)
         {
+            _launchSelectedButton.Enabled = false;
             _testButton.Enabled = false;
             _testMissingButton.Enabled = false;
             _shutdownButton.Enabled = false;
@@ -269,6 +373,7 @@ public sealed class LeaderForm : Form
         var ip = GetSelectedAgentIp();
         if (string.IsNullOrWhiteSpace(pcId) || string.IsNullOrWhiteSpace(ip))
         {
+            _launchSelectedButton.Enabled = false;
             _testButton.Enabled = false;
             _testMissingButton.Enabled = false;
             _shutdownButton.Enabled = false;
@@ -276,6 +381,7 @@ public sealed class LeaderForm : Form
         }
 
         var enabled = !_service.IsLocalAgent(pcId, ip);
+        _launchSelectedButton.Enabled = _grid.SelectedRows.Count == 1;
         _testButton.Enabled = enabled;
         _testMissingButton.Enabled = enabled;
         _shutdownButton.Enabled = enabled;
@@ -314,9 +420,9 @@ public sealed class LeaderForm : Form
         }
 
         var row = _grid.SelectedRows[0];
-        var status = row.Cells["status"].Value?.ToString();
-        var message = row.Cells["message"].Value?.ToString();
-        if (string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase) &&
+        var status = row.Cells["command"].Value?.ToString();
+        var message = row.Cells["error"].ToolTipText;
+        if (string.Equals(status, "Failed", StringComparison.OrdinalIgnoreCase) &&
             !string.IsNullOrWhiteSpace(message))
         {
             return $"Selected failed: {message}";
@@ -348,6 +454,142 @@ public sealed class LeaderForm : Form
         }
 
         _statusLabel.Text = "Sent shutdown command.";
+    }
+
+    private void GridMouseDown(object? sender, MouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Right)
+        {
+            return;
+        }
+
+        var hit = _grid.HitTest(e.X, e.Y);
+        if (hit.RowIndex < 0)
+        {
+            return;
+        }
+
+        _grid.ClearSelection();
+        _grid.Rows[hit.RowIndex].Selected = true;
+        UpdateActionButtons();
+    }
+
+    private void UpdateContextMenuState()
+    {
+        var pcId = GetSelectedAgentPcId();
+        var ip = GetSelectedAgentIp();
+        var hasSelection = !string.IsNullOrWhiteSpace(pcId) && !string.IsNullOrWhiteSpace(ip);
+        var isLocal = hasSelection && _service.IsLocalAgent(pcId!, ip!);
+        _menuLaunch.Enabled = hasSelection;
+        _menuTest.Enabled = hasSelection && !isLocal;
+        _menuCopyPcId.Enabled = hasSelection;
+        _menuCopyIp.Enabled = hasSelection;
+        _menuViewError.Enabled = hasSelection;
+    }
+
+    private void CopySelectedValue(string column)
+    {
+        if (_grid.SelectedRows.Count == 0)
+        {
+            return;
+        }
+
+        var value = _grid.SelectedRows[0].Cells[column].Value?.ToString();
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            Clipboard.SetText(value);
+        }
+    }
+
+    private void ShowSelectedError()
+    {
+        if (_grid.SelectedRows.Count == 0)
+        {
+            return;
+        }
+
+        var message = _grid.SelectedRows[0].Cells["error"].ToolTipText;
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            MessageBox.Show("No error recorded for this PC.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        MessageBox.Show(message, "DadBoard - Last Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+    }
+
+    private static string FormatOnline(bool online, DateTime lastSeen)
+    {
+        var last = lastSeen == default ? "-" : lastSeen.ToLocalTime().ToString("HH:mm:ss");
+        return online ? $"Online ({last})" : $"Offline ({last})";
+    }
+
+    private static string FormatCommandStatus(string status)
+    {
+        if (string.IsNullOrWhiteSpace(status))
+        {
+            return "Idle";
+        }
+
+        return status.ToLowerInvariant() switch
+        {
+            "running" => "Running",
+            "failed" => "Failed",
+            "timeout" => "Timed out",
+            "ws_error" => "Failed",
+            "sent" => "Running",
+            "received" => "Running",
+            "launching" => "Running",
+            "stopping" => "Running",
+            _ => "Running"
+        };
+    }
+
+    private static string FormatAck(DateTime lastAckTs, bool ok, string error)
+    {
+        if (lastAckTs == default)
+        {
+            return "-";
+        }
+
+        var time = lastAckTs.ToLocalTime().ToString("HH:mm:ss");
+        if (!ok)
+        {
+            return $"ERR {time}";
+        }
+
+        return $"OK {time}";
+    }
+
+    private static string Truncate(string text, int max)
+    {
+        if (string.IsNullOrEmpty(text) || text.Length <= max)
+        {
+            return text;
+        }
+
+        return text[..max] + "...";
+    }
+
+    private void StartRefresh()
+    {
+        if (_refreshTimer.Enabled)
+        {
+            return;
+        }
+
+        RefreshGridSafe();
+        _refreshTimer.Start();
+    }
+
+    private void StopRefresh()
+    {
+        if (!_refreshTimer.Enabled)
+        {
+            return;
+        }
+
+        _refreshTimer.Stop();
     }
 
     public void AllowClose()
