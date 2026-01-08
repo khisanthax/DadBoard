@@ -403,30 +403,28 @@ public sealed class LeaderService : IDisposable
             builder.WebHost.UseUrls($"http://0.0.0.0:{_config.UpdatePort}");
             var app = builder.Build();
 
-            app.MapGet("/updates/version.json", () =>
+            app.MapGet("/updates/latest.json", (HttpContext context) =>
             {
-                if (!TryGetUpdateFileInfo(out var runtimePath, out var version, out var sha, out var error))
+                var manifest = BuildUpdateManifest(context);
+                if (manifest == null)
                 {
-                    _logger.Warn($"Update host version.json error: {error}");
-                    return Results.Problem(error, statusCode: StatusCodes.Status404NotFound);
+                    _logger.Warn("Update host latest.json not available.");
+                    return Results.Problem("Update manifest not available.", statusCode: StatusCodes.Status404NotFound);
                 }
 
-                return Results.Json(new UpdateVersionInfo
-                {
-                    Version = version,
-                    Sha256 = sha
-                });
+                return Results.Json(manifest);
             });
 
-            app.MapGet("/updates/DadBoard.exe", () =>
+            app.MapGet("/updates/{file}", (string file) =>
             {
-                if (!TryGetUpdateFileInfo(out var runtimePath, out _, out _, out var error))
+                var path = Path.Combine(DadBoardPaths.UpdateSourceDir, file);
+                if (!File.Exists(path))
                 {
-                    _logger.Warn($"Update host DadBoard.exe error: {error}");
-                    return Results.Problem(error, statusCode: StatusCodes.Status404NotFound);
+                    _logger.Warn($"Update host missing file: {path}");
+                    return Results.Problem("Update file not found.", statusCode: StatusCodes.Status404NotFound);
                 }
 
-                return Results.File(runtimePath, "application/octet-stream", "DadBoard.exe");
+                return Results.File(path, "application/octet-stream", file);
             });
 
             _updateHost = app;
@@ -437,6 +435,97 @@ public sealed class LeaderService : IDisposable
         {
             _logger.Error($"Update host failed to start: {ex.Message}");
         }
+    }
+
+    private UpdateManifest? BuildUpdateManifest(HttpContext context)
+    {
+        try
+        {
+            var manifestPath = Path.Combine(DadBoardPaths.UpdateSourceDir, "latest.json");
+            UpdateManifest? manifest = null;
+
+            if (File.Exists(manifestPath))
+            {
+                var json = File.ReadAllText(manifestPath);
+                manifest = JsonSerializer.Deserialize<UpdateManifest>(json, JsonUtil.Options);
+            }
+
+            if (manifest == null || string.IsNullOrWhiteSpace(manifest.PackageUrl))
+            {
+                if (!TryGetLatestPackage(out var fileName, out var version))
+                {
+                    return null;
+                }
+
+                manifest ??= new UpdateManifest();
+                manifest.LatestVersion = VersionUtil.Normalize(version);
+                manifest.PackageUrl = $"{context.Request.Scheme}://{context.Request.Host}/updates/{fileName}";
+            }
+
+            if (string.IsNullOrWhiteSpace(manifest.LatestVersion))
+            {
+                manifest.LatestVersion = VersionUtil.Normalize("0.0.0");
+            }
+
+            if (manifest.PackageUrl.StartsWith("/", StringComparison.Ordinal))
+            {
+                manifest.PackageUrl = $"{context.Request.Scheme}://{context.Request.Host}{manifest.PackageUrl}";
+            }
+
+            return manifest;
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn($"Update manifest build failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static bool TryGetLatestPackage(out string fileName, out string version)
+    {
+        fileName = "";
+        version = "0.0.0";
+        if (!Directory.Exists(DadBoardPaths.UpdateSourceDir))
+        {
+            return false;
+        }
+
+        var packages = Directory.GetFiles(DadBoardPaths.UpdateSourceDir, "DadBoard-*.zip");
+        if (packages.Length == 0)
+        {
+            return false;
+        }
+
+        var best = packages
+            .Select(path => (path, version: ParseVersionFromFileName(Path.GetFileName(path))))
+            .OrderByDescending(entry => entry.version, new VersionComparer())
+            .FirstOrDefault();
+
+        if (string.IsNullOrWhiteSpace(best.path))
+        {
+            return false;
+        }
+
+        fileName = Path.GetFileName(best.path);
+        version = best.version;
+        return true;
+    }
+
+    private static string ParseVersionFromFileName(string fileName)
+    {
+        var name = Path.GetFileNameWithoutExtension(fileName);
+        if (name.StartsWith("DadBoard-", StringComparison.OrdinalIgnoreCase))
+        {
+            name = name.Substring("DadBoard-".Length);
+        }
+
+        return VersionUtil.Normalize(name);
+    }
+
+    private sealed class VersionComparer : IComparer<string>
+    {
+        public int Compare(string? x, string? y)
+            => VersionUtil.Compare(x, y);
     }
 
     private static bool TryGetUpdateFileInfo(out string runtimePath, out string version, out string sha256, out string error)

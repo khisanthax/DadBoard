@@ -118,7 +118,10 @@ public sealed class DiagnosticsForm : Form
         _runningPath.Text = runningPath;
         _expectedPath.Text = DadBoardPaths.InstalledExePath;
         _version.Text = VersionUtil.GetCurrentVersion();
-        _updateSource.Text = "Not configured";
+        var updateConfig = UpdateConfigStore.Load();
+        _updateSource.Text = string.IsNullOrWhiteSpace(updateConfig.ManifestUrl)
+            ? "Not configured"
+            : updateConfig.ManifestUrl;
         _logsPath.Text = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DadBoard", "logs");
 
         UpdateDevWarning(runningPath);

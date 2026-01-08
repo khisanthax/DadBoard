@@ -157,7 +157,7 @@ static class Installer
             throw new InvalidOperationException("Unable to determine executable path.");
         }
 
-        Directory.CreateDirectory(DadBoardPaths.ProgramFilesDir);
+        Directory.CreateDirectory(DadBoardPaths.InstallDir);
         File.Copy(exePath, DadBoardPaths.InstalledExePath, true);
     }
 
