@@ -5,6 +5,11 @@ namespace DadBoard.Spine.Shared;
 
 public static class DadBoardPaths
 {
+    public static string LegacyInstallDir =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "DadBoard");
+
+    public static string LegacyInstallExePath => Path.Combine(LegacyInstallDir, "DadBoard.exe");
+
     public static string InstallDir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "DadBoard");
 

@@ -18,6 +18,8 @@ public sealed class SetupForm : Form
     private readonly Button _uninstallButton = new();
     private readonly Button _startButton = new();
     private readonly Button _closeButton = new();
+    private readonly FlowLayoutPanel _actionsPanel = new();
+    private readonly FlowLayoutPanel _finalPanel = new();
     private SetupLogger? _logger;
     private readonly CancellationTokenSource _cts = new();
 
@@ -33,8 +35,9 @@ public sealed class SetupForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 4
+            RowCount = 5
         };
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -50,12 +53,9 @@ public sealed class SetupForm : Form
         _statusLabel.Text = "Ready.";
         _statusLabel.AutoSize = true;
 
-        var actions = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            AutoSize = true,
-            FlowDirection = FlowDirection.LeftToRight
-        };
+        _actionsPanel.Dock = DockStyle.Fill;
+        _actionsPanel.AutoSize = true;
+        _actionsPanel.FlowDirection = FlowDirection.LeftToRight;
 
         _installButton.Text = "Install";
         _installButton.AutoSize = true;
@@ -69,7 +69,7 @@ public sealed class SetupForm : Form
         _uninstallButton.AutoSize = true;
         _uninstallButton.Click += async (_, _) => await RunActionAsync(SetupAction.Uninstall);
 
-        actions.Controls.AddRange(new Control[]
+        _actionsPanel.Controls.AddRange(new Control[]
         {
             _installButton,
             _updateButton,
@@ -81,12 +81,10 @@ public sealed class SetupForm : Form
         _logBox.ScrollBars = ScrollBars.Vertical;
         _logBox.Dock = DockStyle.Fill;
 
-        var footer = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            AutoSize = true,
-            FlowDirection = FlowDirection.LeftToRight
-        };
+        _finalPanel.Dock = DockStyle.Fill;
+        _finalPanel.AutoSize = true;
+        _finalPanel.FlowDirection = FlowDirection.LeftToRight;
+        _finalPanel.Visible = false;
 
         _startButton.Text = "Start DadBoard";
         _startButton.AutoSize = true;
@@ -97,13 +95,14 @@ public sealed class SetupForm : Form
         _closeButton.AutoSize = true;
         _closeButton.Click += (_, _) => Close();
 
-        footer.Controls.Add(_startButton);
-        footer.Controls.Add(_closeButton);
+        _finalPanel.Controls.Add(_startButton);
+        _finalPanel.Controls.Add(_closeButton);
 
         layout.Controls.Add(header, 0, 0);
         layout.Controls.Add(_statusLabel, 0, 1);
-        layout.Controls.Add(_logBox, 0, 2);
-        layout.Controls.Add(footer, 0, 3);
+        layout.Controls.Add(_actionsPanel, 0, 2);
+        layout.Controls.Add(_logBox, 0, 3);
+        layout.Controls.Add(_finalPanel, 0, 4);
         Controls.Add(layout);
 
         FormClosed += (_, _) => _cts.Cancel();
@@ -126,6 +125,7 @@ public sealed class SetupForm : Form
             _uninstallButton.Enabled = false;
         }
 
+        ShowActionsView("startup");
         UpdateActionButtons();
     }
 
@@ -161,7 +161,16 @@ public sealed class SetupForm : Form
         {
             _statusLabel.Text = $"{action} complete.";
             AppendLog($"{action} complete.");
-            _startButton.Enabled = action != SetupAction.Uninstall;
+            if (action == SetupAction.Uninstall)
+            {
+                _startButton.Enabled = false;
+                ShowActionsView("uninstall_complete");
+            }
+            else
+            {
+                _startButton.Enabled = true;
+                ShowFinalView("install_complete");
+            }
         }
         else
         {
@@ -181,6 +190,34 @@ public sealed class SetupForm : Form
         _installButton.Enabled = !_busy && !installed && loggingReady;
         _updateButton.Enabled = !_busy && installed && loggingReady;
         _uninstallButton.Enabled = !_busy && installed && loggingReady;
+    }
+
+    private void ShowActionsView(string reason)
+    {
+        _actionsPanel.Visible = true;
+        _finalPanel.Visible = false;
+        LogInstallDetection(reason, "Actions");
+    }
+
+    private void ShowFinalView(string reason)
+    {
+        _actionsPanel.Visible = false;
+        _finalPanel.Visible = true;
+        LogInstallDetection(reason, "Final");
+    }
+
+    private void LogInstallDetection(string reason, string initialView)
+    {
+        var canonicalExists = File.Exists(DadBoardPaths.InstalledExePath);
+        var legacyExists = File.Exists(DadBoardPaths.LegacyInstallExePath);
+        if (legacyExists && !canonicalExists)
+        {
+            _statusLabel.Text =
+                "Legacy install detected at Program Files; new install will migrate to user-writable location.";
+        }
+
+        _logger?.Info($"canonical_exists={canonicalExists} legacy_exists={legacyExists} initial_view={initialView} reason={reason}");
+        AppendLog($"canonical_exists={canonicalExists} legacy_exists={legacyExists} initial_view={initialView} reason={reason}");
     }
 
     private void LaunchInstalledApp()
