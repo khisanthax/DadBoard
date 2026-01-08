@@ -35,6 +35,9 @@ public sealed class AgentService : IDisposable
     private WebApplication? _webApp;
     private Task? _webAppTask;
     private readonly HttpClient _httpClient = new();
+    private Timer? _updateTimer;
+    private readonly SemaphoreSlim _updateLock = new(1, 1);
+    private UpdateState _updateState = new();
 
     private readonly ConcurrentDictionary<WebSocket, DateTime> _clients = new();
     private Timer? _helloTimer;
@@ -81,6 +84,12 @@ public sealed class AgentService : IDisposable
 
             _helloTimer = new Timer(_ => SendHello(), null, 0, _config.HelloIntervalMs);
             _stateTimer = new Timer(_ => PersistState(), null, 0, 1000);
+            _updateState = UpdateStateStore.Load();
+            if (string.IsNullOrWhiteSpace(_updateState.ManifestUrl))
+            {
+                _updateState.ManifestUrl = "http://127.0.0.1:39602/updates/latest.json";
+            }
+            _updateTimer = new Timer(_ => _ = CheckForUpdatesAsync(triggered: false), null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(10));
 
             _logger.Info("Agent started.");
         }
@@ -320,6 +329,23 @@ public sealed class AgentService : IDisposable
             return;
         }
 
+        if (envelope.Type == ProtocolConstants.TypeCommandTriggerUpdateNow)
+        {
+            var command = envelope.Payload.Deserialize<TriggerUpdateNowCommand>(JsonUtil.Options);
+            if (command == null)
+            {
+                SendAck(socket, envelope.CorrelationId, ok: false, "Invalid payload");
+                return;
+            }
+
+            _state.LastCommandId = envelope.CorrelationId;
+            _state.LastCommandType = envelope.Type;
+            _state.LastCommandTs = DateTime.UtcNow.ToString("O");
+
+            _ = Task.Run(() => ExecuteTriggerUpdateNow(envelope.CorrelationId, command, socket));
+            return;
+        }
+
         SendAck(socket, envelope.CorrelationId, ok: false, "Unknown command");
     }
 
@@ -452,50 +478,160 @@ public sealed class AgentService : IDisposable
             return;
         }
 
-        var baseUrl = command.UpdateBaseUrl.TrimEnd('/');
-        var versionUrl = $"{baseUrl}/updates/version.json";
-        var exeUrl = $"{baseUrl}/updates/DadBoard.exe";
+        var manifestUrl = $"{command.UpdateBaseUrl.TrimEnd('/')}/updates/latest.json";
+        _updateState.ManifestUrl = manifestUrl;
+        UpdateStateStore.Save(_updateState);
+        await RunSetupUpdateAsync(manifestUrl).ConfigureAwait(false);
+    }
+
+    private async Task ExecuteTriggerUpdateNow(string correlationId, TriggerUpdateNowCommand command, WebSocket socket)
+    {
+        SendAck(socket, correlationId, ok: true, null);
+
+        if (string.IsNullOrWhiteSpace(command.ManifestUrl))
+        {
+            SendUpdateStatus("failed", "Missing manifest URL.");
+            _logger.Warn($"TriggerUpdateNow failed corr={correlationId}: missing manifest URL.");
+            return;
+        }
+
+        _updateState.ManifestUrl = command.ManifestUrl;
+        UpdateStateStore.Save(_updateState);
+
+        await CheckForUpdatesAsync(triggered: true).ConfigureAwait(false);
+    }
+
+    private async Task CheckForUpdatesAsync(bool triggered)
+    {
+        if (!await _updateLock.WaitAsync(0).ConfigureAwait(false))
+        {
+            return;
+        }
+
+        try
+        {
+            var manifestUrl = _updateState.ManifestUrl;
+            if (string.IsNullOrWhiteSpace(manifestUrl))
+            {
+                if (triggered)
+                {
+                    SendUpdateStatus("failed", "No manifest URL configured.");
+                }
+                return;
+            }
+
+            _updateState.LastCheckedUtc = DateTime.UtcNow.ToString("O");
+            UpdateStateStore.Save(_updateState);
+
+            UpdateManifest? manifest = null;
+            try
+            {
+                var json = await _httpClient.GetStringAsync(manifestUrl).ConfigureAwait(false);
+                manifest = JsonSerializer.Deserialize<UpdateManifest>(json, JsonUtil.Options);
+            }
+            catch (Exception ex)
+            {
+                _updateState.LastResult = "Manifest fetch failed";
+                _updateState.LastError = ex.Message;
+                UpdateStateStore.Save(_updateState);
+                if (triggered)
+                {
+                    SendUpdateStatus("failed", $"Manifest fetch failed: {ex.Message}");
+                }
+                _logger.Warn($"Update check failed: {ex.Message}");
+                return;
+            }
+
+            if (manifest == null || string.IsNullOrWhiteSpace(manifest.LatestVersion) || string.IsNullOrWhiteSpace(manifest.PackageUrl))
+            {
+                _updateState.LastResult = "Manifest invalid";
+                _updateState.LastError = "Missing latest_version or package_url.";
+                UpdateStateStore.Save(_updateState);
+                if (triggered)
+                {
+                    SendUpdateStatus("failed", "Manifest missing required fields.");
+                }
+                _logger.Warn("Update manifest missing required fields.");
+                return;
+            }
+
+            manifest.LatestVersion = VersionUtil.Normalize(manifest.LatestVersion);
+            _updateState.LatestVersion = manifest.LatestVersion;
+            _updateState.ForceCheckToken = manifest.ForceCheckToken;
+            UpdateStateStore.Save(_updateState);
+
+            var installed = VersionUtil.GetCurrentVersion();
+            var minSupported = string.IsNullOrWhiteSpace(manifest.MinSupportedVersion)
+                ? null
+                : VersionUtil.Normalize(manifest.MinSupportedVersion);
+
+            var updateAvailable = VersionUtil.Compare(manifest.LatestVersion, installed) > 0;
+            var minRequired = minSupported != null && VersionUtil.Compare(installed, minSupported) < 0;
+            if (!updateAvailable && !minRequired)
+            {
+                _updateState.LastResult = "Up to date";
+                _updateState.LastError = "";
+                UpdateStateStore.Save(_updateState);
+                if (triggered)
+                {
+                    SendUpdateStatus("idle", "Up to date.");
+                }
+                return;
+            }
+
+            _logger.Info($"Update required: installed={installed} latest={manifest.LatestVersion} min={minSupported ?? "n/a"}");
+            await RunSetupUpdateAsync(manifestUrl).ConfigureAwait(false);
+        }
+        finally
+        {
+            _updateLock.Release();
+        }
+    }
+
+    private async Task RunSetupUpdateAsync(string manifestUrl)
+    {
+        var setupPath = Path.Combine(DadBoardPaths.InstallDir, "DadBoardSetup.exe");
+        if (!File.Exists(setupPath))
+        {
+            var message = $"DadBoardSetup.exe not found at {setupPath}.";
+            SendUpdateStatus("failed", message);
+            _logger.Error(message);
+            return;
+        }
 
         try
         {
             SendUpdateStatus("downloading", "Downloading update.");
-            _logger.Info($"UpdateSelf downloading from {baseUrl} corr={correlationId}.");
-
-            Directory.CreateDirectory(DadBoardPaths.UpdatesDir);
-
-            var versionJson = await _httpClient.GetStringAsync(versionUrl).ConfigureAwait(false);
-            var versionInfo = JsonSerializer.Deserialize<UpdateVersionInfo>(versionJson, JsonUtil.Options);
-            if (versionInfo == null || string.IsNullOrWhiteSpace(versionInfo.Sha256))
+            var args = $"/update --silent --manifest \"{manifestUrl}\"";
+            _logger.Info($"Starting updater: \"{setupPath}\" {args}");
+            var process = Process.Start(new ProcessStartInfo(setupPath, args)
             {
-                SendUpdateStatus("failed", "Invalid update metadata.");
-                _logger.Warn($"UpdateSelf invalid metadata corr={correlationId}.");
+                UseShellExecute = true,
+                WorkingDirectory = DadBoardPaths.InstallDir
+            });
+            if (process == null)
+            {
+                SendUpdateStatus("failed", "Failed to start updater.");
                 return;
             }
 
-            await DownloadFileAsync(exeUrl, DadBoardPaths.UpdateNewExePath).ConfigureAwait(false);
-            var actualSha = HashUtil.ComputeSha256(DadBoardPaths.UpdateNewExePath);
-            if (!string.Equals(actualSha, versionInfo.Sha256, StringComparison.OrdinalIgnoreCase))
+            SendUpdateStatus("installing", "Applying update.");
+            await process.WaitForExitAsync(_cts.Token).ConfigureAwait(false);
+
+            if (process.ExitCode != 0)
             {
-                SendUpdateStatus("failed", "SHA256 mismatch.");
-                _logger.Warn($"UpdateSelf sha mismatch corr={correlationId} expected={versionInfo.Sha256} actual={actualSha}");
+                SendUpdateStatus("failed", $"Updater exit code {process.ExitCode}");
+                _logger.Error($"Updater failed with exit code {process.ExitCode}");
                 return;
             }
 
-            SendUpdateStatus("applying", "Applying update.");
-            if (!LaunchBootstrapperForUpdate(DadBoardPaths.UpdateNewExePath))
-            {
-                SendUpdateStatus("failed", "Failed to launch bootstrapper.");
-                return;
-            }
-
-            SendUpdateStatus("restarting", "Restarting for update.");
-            _logger.Info("UpdateSelf restarting via bootstrapper.");
+            SendUpdateStatus("restarting", "Restarting.");
             ShutdownRequested?.Invoke();
         }
         catch (Exception ex)
         {
             SendUpdateStatus("failed", ex.Message);
-            _logger.Error($"UpdateSelf failed corr={correlationId}: {ex}");
+            _logger.Error($"Updater failed: {ex}");
         }
     }
 
@@ -695,7 +831,7 @@ public sealed class AgentService : IDisposable
             Name = _config.DisplayName,
             Ip = GetLocalIp(),
             WsPort = _config.WsPort,
-            Version = GetAppVersion(),
+            Version = VersionUtil.GetCurrentVersion(),
             Ts = DateTime.UtcNow.ToString("O")
         };
 
@@ -738,6 +874,7 @@ public sealed class AgentService : IDisposable
         _cts.Cancel();
         _helloTimer?.Dispose();
         _stateTimer?.Dispose();
+        _updateTimer?.Dispose();
         _httpClient.Dispose();
         if (_webApp != null)
         {
@@ -754,20 +891,6 @@ public sealed class AgentService : IDisposable
 
     private static string GetAppVersion()
     {
-        try
-        {
-            var path = Process.GetCurrentProcess().MainModule?.FileName;
-            if (string.IsNullOrWhiteSpace(path))
-            {
-                return "0.0.0.0";
-            }
-
-            var info = FileVersionInfo.GetVersionInfo(path);
-            return info.FileVersion ?? "0.0.0.0";
-        }
-        catch
-        {
-            return "0.0.0.0";
-        }
+        return VersionUtil.GetCurrentVersion();
     }
 }

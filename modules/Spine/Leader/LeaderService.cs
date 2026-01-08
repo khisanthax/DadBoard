@@ -403,30 +403,36 @@ public sealed class LeaderService : IDisposable
             builder.WebHost.UseUrls($"http://0.0.0.0:{_config.UpdatePort}");
             var app = builder.Build();
 
-            app.MapGet("/updates/version.json", () =>
+            Directory.CreateDirectory(DadBoardPaths.UpdateSourceDir);
+
+            app.MapGet("/updates/latest.json", () =>
             {
-                if (!TryGetUpdateFileInfo(out var runtimePath, out var version, out var sha, out var error))
+                var baseUrl = $"http://{GetLocalUpdateHostIp()}:{_config.UpdatePort}";
+                var manifest = BuildUpdateManifest(baseUrl);
+                if (manifest == null)
                 {
-                    _logger.Warn($"Update host version.json error: {error}");
-                    return Results.Problem(error, statusCode: StatusCodes.Status404NotFound);
+                    _logger.Warn("Update host latest.json not available.");
+                    return Results.Problem("No update package found.", statusCode: StatusCodes.Status404NotFound);
                 }
 
-                return Results.Json(new UpdateVersionInfo
-                {
-                    Version = version,
-                    Sha256 = sha
-                });
+                return Results.Json(manifest);
             });
 
-            app.MapGet("/updates/DadBoard.exe", () =>
+            app.MapGet("/updates/{file}", (string file) =>
             {
-                if (!TryGetUpdateFileInfo(out var runtimePath, out _, out _, out var error))
+                if (!file.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
                 {
-                    _logger.Warn($"Update host DadBoard.exe error: {error}");
-                    return Results.Problem(error, statusCode: StatusCodes.Status404NotFound);
+                    return Results.NotFound();
                 }
 
-                return Results.File(runtimePath, "application/octet-stream", "DadBoard.exe");
+                var safeName = Path.GetFileName(file);
+                var path = Path.Combine(DadBoardPaths.UpdateSourceDir, safeName);
+                if (!File.Exists(path))
+                {
+                    return Results.NotFound();
+                }
+
+                return Results.File(path, "application/zip", safeName);
             });
 
             _updateHost = app;
@@ -442,7 +448,7 @@ public sealed class LeaderService : IDisposable
     private static bool TryGetUpdateFileInfo(out string runtimePath, out string version, out string sha256, out string error)
     {
         runtimePath = DadBoardPaths.RuntimeExePath;
-        version = "0.0.0.0";
+        version = "0.0.0";
         sha256 = "";
         error = "";
 
@@ -459,7 +465,7 @@ public sealed class LeaderService : IDisposable
         try
         {
             var info = System.Diagnostics.FileVersionInfo.GetVersionInfo(runtimePath);
-            version = info.FileVersion ?? "0.0.0.0";
+            version = VersionUtil.Normalize(info.FileVersion);
             sha256 = HashUtil.ComputeSha256(runtimePath);
             return true;
         }
@@ -507,7 +513,7 @@ public sealed class LeaderService : IDisposable
         agent.Name = string.IsNullOrWhiteSpace(hello.Name) ? hello.PcId : hello.Name;
         agent.Ip = string.IsNullOrWhiteSpace(ip) ? hello.Ip : ip;
         agent.WsPort = hello.WsPort > 0 ? hello.WsPort : _config.WsPortDefault;
-        agent.Version = hello.Version ?? "";
+        agent.Version = VersionUtil.Normalize(hello.Version);
         agent.LastSeen = DateTime.UtcNow;
         agent.Online = true;
 
@@ -783,6 +789,12 @@ public sealed class LeaderService : IDisposable
         return ips;
     }
 
+    private string GetManifestUrl(AgentInfo agent)
+    {
+        var baseUrl = GetUpdateBaseUrl(agent);
+        return $"{baseUrl}/updates/latest.json";
+    }
+
     private string GetUpdateBaseUrl(AgentInfo agent)
     {
         var port = _config.UpdatePort;
@@ -801,6 +813,12 @@ public sealed class LeaderService : IDisposable
         return $"http://{match}:{port}";
     }
 
+    private string GetLocalUpdateHostIp()
+    {
+        var match = _localIps.FirstOrDefault(ip => !string.Equals(ip, "127.0.0.1", StringComparison.OrdinalIgnoreCase));
+        return string.IsNullOrWhiteSpace(match) ? "127.0.0.1" : match;
+    }
+
     private static bool IsSameSubnet(string ipA, string ipB)
     {
         if (!IPAddress.TryParse(ipA, out var a) || !IPAddress.TryParse(ipB, out var b))
@@ -816,6 +834,97 @@ public sealed class LeaderService : IDisposable
         var bytesA = a.GetAddressBytes();
         var bytesB = b.GetAddressBytes();
         return bytesA[0] == bytesB[0] && bytesA[1] == bytesB[1] && bytesA[2] == bytesB[2];
+    }
+
+    private UpdateManifest? BuildUpdateManifest(string baseUrl)
+    {
+        var manifestPath = Path.Combine(DadBoardPaths.UpdateSourceDir, "latest.json");
+        if (File.Exists(manifestPath))
+        {
+            try
+            {
+                var json = File.ReadAllText(manifestPath);
+                var manifest = JsonSerializer.Deserialize<UpdateManifest>(json, JsonUtil.Options);
+                if (manifest != null)
+                {
+                    manifest.LatestVersion = VersionUtil.Normalize(manifest.LatestVersion);
+                    if (!string.IsNullOrWhiteSpace(manifest.PackageUrl) &&
+                        !manifest.PackageUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                    {
+                        manifest.PackageUrl = $"{baseUrl}/updates/{manifest.PackageUrl.TrimStart('/')}";
+                    }
+                    return manifest;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Warn($"Failed to parse latest.json: {ex.Message}");
+            }
+        }
+
+        var packages = Directory.GetFiles(DadBoardPaths.UpdateSourceDir, "DadBoard-*.zip");
+        if (packages.Length == 0)
+        {
+            return null;
+        }
+
+        string? latestFile = null;
+        string? latestVersion = null;
+        foreach (var file in packages)
+        {
+            var version = ParseVersionFromFileName(Path.GetFileName(file));
+            if (string.IsNullOrWhiteSpace(version))
+            {
+                continue;
+            }
+
+            if (latestVersion == null || VersionUtil.Compare(version, latestVersion) > 0)
+            {
+                latestVersion = version;
+                latestFile = file;
+            }
+        }
+
+        if (latestFile == null || latestVersion == null)
+        {
+            return null;
+        }
+
+        var token = 0;
+        var tokenPath = Path.Combine(DadBoardPaths.UpdateSourceDir, "force_token.txt");
+        if (File.Exists(tokenPath))
+        {
+            var tokenText = File.ReadAllText(tokenPath).Trim();
+            _ = int.TryParse(tokenText, out token);
+        }
+
+        return new UpdateManifest
+        {
+            LatestVersion = VersionUtil.Normalize(latestVersion),
+            PackageUrl = $"{baseUrl}/updates/{Path.GetFileName(latestFile)}",
+            ForceCheckToken = token
+        };
+    }
+
+    private static string? ParseVersionFromFileName(string? fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return null;
+        }
+
+        if (!fileName.StartsWith("DadBoard-", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var suffix = fileName.Substring("DadBoard-".Length);
+        if (suffix.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+        {
+            suffix = suffix.Substring(0, suffix.Length - ".zip".Length);
+        }
+
+        return suffix;
     }
 
     private void StartTimeout(string pcId, string correlationId)
@@ -943,15 +1052,15 @@ public sealed class LeaderService : IDisposable
         }
 
         var correlationId = Guid.NewGuid().ToString("N");
-        var baseUrl = GetUpdateBaseUrl(agent);
-        var payload = new UpdateSelfCommand
+        var manifestUrl = GetManifestUrl(agent);
+        var payload = new TriggerUpdateNowCommand
         {
-            UpdateBaseUrl = baseUrl
+            ManifestUrl = manifestUrl
         };
 
         var envelope = new
         {
-            type = ProtocolConstants.TypeCommandUpdateSelf,
+            type = ProtocolConstants.TypeCommandTriggerUpdateNow,
             correlationId,
             pcId = agent.PcId,
             payload,
@@ -962,8 +1071,8 @@ public sealed class LeaderService : IDisposable
         var buffer = Encoding.UTF8.GetBytes(json);
 
         agent.UpdateStatus = "sent";
-        agent.UpdateMessage = $"Update requested via {baseUrl}";
-        _logger.Info($"Sending UpdateSelf to pcId={agent.PcId} ip={agent.Ip} ws={agent.WsPort} base={baseUrl} corr={correlationId}");
+        agent.UpdateMessage = $"Update requested via {manifestUrl}";
+        _logger.Info($"Sending TriggerUpdateNow to pcId={agent.PcId} ip={agent.Ip} ws={agent.WsPort} manifest={manifestUrl} corr={correlationId}");
 
         try
         {

@@ -13,6 +13,7 @@ public static class ProtocolConstants
     public const string TypeCommandShutdownApp = "Command.ShutdownApp";
     public const string TypeCommandScanSteamGames = "Command.ScanSteamGames";
     public const string TypeCommandUpdateSelf = "Command.UpdateSelf";
+    public const string TypeCommandTriggerUpdateNow = "Command.TriggerUpdateNow";
     public const string TypeSteamInventory = "SteamInventory";
     public const string TypeUpdateStatus = "UpdateStatus";
     public const string TypeAck = "Ack";
@@ -73,6 +74,11 @@ public sealed class ScanSteamGamesCommand
 public sealed class UpdateSelfCommand
 {
     public string? UpdateBaseUrl { get; set; }
+}
+
+public sealed class TriggerUpdateNowCommand
+{
+    public string? ManifestUrl { get; set; }
 }
 
 public sealed class AckPayload
@@ -147,6 +153,14 @@ public sealed class UpdateVersionInfo
 {
     public string Version { get; set; } = "";
     public string Sha256 { get; set; } = "";
+}
+
+public sealed class UpdateManifest
+{
+    public string LatestVersion { get; set; } = "";
+    public string PackageUrl { get; set; } = "";
+    public int ForceCheckToken { get; set; }
+    public string? MinSupportedVersion { get; set; }
 }
 
 public sealed class KnownAgentRecord

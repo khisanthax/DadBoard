@@ -1318,10 +1318,12 @@ public sealed class LeaderForm : Form
         return status.ToLowerInvariant() switch
         {
             "downloading" => "Downloading",
+            "installing" => "Installing",
             "applying" => "Applying",
             "restarting" => "Restarting",
             "failed" => "Failed",
             "sent" => "Sent",
+            "idle" => "Idle",
             _ => status
         };
     }
