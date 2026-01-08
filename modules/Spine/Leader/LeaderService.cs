@@ -442,7 +442,7 @@ public sealed class LeaderService : IDisposable
     private static bool TryGetUpdateFileInfo(out string runtimePath, out string version, out string sha256, out string error)
     {
         runtimePath = DadBoardPaths.RuntimeExePath;
-        version = "0.0.0.0";
+        version = "0.0.0";
         sha256 = "";
         error = "";
 
@@ -459,7 +459,7 @@ public sealed class LeaderService : IDisposable
         try
         {
             var info = System.Diagnostics.FileVersionInfo.GetVersionInfo(runtimePath);
-            version = info.FileVersion ?? "0.0.0.0";
+            version = VersionUtil.Normalize(info.FileVersion ?? "0.0.0");
             sha256 = HashUtil.ComputeSha256(runtimePath);
             return true;
         }
@@ -507,7 +507,7 @@ public sealed class LeaderService : IDisposable
         agent.Name = string.IsNullOrWhiteSpace(hello.Name) ? hello.PcId : hello.Name;
         agent.Ip = string.IsNullOrWhiteSpace(ip) ? hello.Ip : ip;
         agent.WsPort = hello.WsPort > 0 ? hello.WsPort : _config.WsPortDefault;
-        agent.Version = hello.Version ?? "";
+        agent.Version = VersionUtil.Normalize(hello.Version ?? "");
         agent.LastSeen = DateTime.UtcNow;
         agent.Online = true;
 

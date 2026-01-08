@@ -695,7 +695,7 @@ public sealed class AgentService : IDisposable
             Name = _config.DisplayName,
             Ip = GetLocalIp(),
             WsPort = _config.WsPort,
-            Version = GetAppVersion(),
+            Version = VersionUtil.Normalize(GetAppVersion()),
             Ts = DateTime.UtcNow.ToString("O")
         };
 
@@ -759,15 +759,15 @@ public sealed class AgentService : IDisposable
             var path = Process.GetCurrentProcess().MainModule?.FileName;
             if (string.IsNullOrWhiteSpace(path))
             {
-                return "0.0.0.0";
+                return "0.0.0";
             }
 
             var info = FileVersionInfo.GetVersionInfo(path);
-            return info.FileVersion ?? "0.0.0.0";
+            return VersionUtil.Normalize(info.FileVersion ?? "0.0.0");
         }
         catch
         {
-            return "0.0.0.0";
+            return "0.0.0";
         }
     }
 }

@@ -117,7 +117,7 @@ public sealed class DiagnosticsForm : Form
         var runningPath = Process.GetCurrentProcess().MainModule?.FileName ?? "Unknown";
         _runningPath.Text = runningPath;
         _expectedPath.Text = DadBoardPaths.InstalledExePath;
-        _version.Text = Application.ProductVersion ?? "Unknown";
+        _version.Text = VersionUtil.GetCurrentVersion();
         _updateSource.Text = "Not configured";
         _logsPath.Text = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DadBoard", "logs");
 
@@ -163,7 +163,7 @@ public sealed class DiagnosticsForm : Form
             _agentVersions.Items.Add(new ListViewItem(new[]
             {
                 agent.Name,
-                string.IsNullOrWhiteSpace(agent.Version) ? "-" : agent.Version
+                string.IsNullOrWhiteSpace(agent.Version) ? "-" : VersionUtil.Normalize(agent.Version)
             }));
         }
     }
