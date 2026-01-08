@@ -1,13 +1,13 @@
-# DadBoard – Master Roadmap, Guardrails & Decision Tree (Cursor Execution Guide)
+# DadBoard - Master Roadmap, Guardrails and Decision Tree (Cursor Execution Guide)
 
 > **Project:** DadBoard
 > **Goal:** One unified orchestration app for multi-PC family gaming:
-> - Remote launch & readiness
+> - Remote launch and readiness
 > - Voice coordination
 > - Mic floor control
 > - Minimal friction, maximum reliability
 
-This document is the **source of truth** for how work proceeds.
+This document is the source of truth for how work proceeds.
 Cursor should follow this strictly.
 
 ---
@@ -15,17 +15,17 @@ Cursor should follow this strictly.
 ## 0. GLOBAL RULES (NON-NEGOTIABLE)
 
 ### 0.1 Phase Discipline
-- Only work on the **current phase** unless explicitly instructed.
+- Only work on the current phase unless explicitly instructed.
 - If an idea belongs to a future phase:
   - Document it in `docs/ideas.md`
-  - Do **not** implement early.
+  - Do not implement early.
 
 ### 0.2 Packaging Rule (ALWAYS)
-At the end of **every completed task**:
-1. Publish **single-file**, **self-contained**, **win-x64** EXE.
+At the end of every completed task:
+1. Publish single-file, self-contained, win-x64 EXE.
 2. If DadBoard is running and blocks publish/install:
-   - You are allowed to **terminate it automatically**.
-3. Commit + push.
+   - You are allowed to terminate it automatically.
+3. Commit and push.
 4. State:
    - Commit hash
    - What changed
@@ -39,19 +39,19 @@ At the end of **every completed task**:
 - UI must never freeze due to long work on UI thread.
 
 ### 0.4 Leader vs UI Rule (Critical)
-- **Leader is a background state.**
-- **Dashboard is only a view.**
+- Leader is a background state.
+- Dashboard is only a view.
 - Closing dashboard must NEVER disable leader.
-- Only explicit “Disable Leader” stops it.
+- Only explicit "Disable Leader" stops it.
 
-### 0.5 Config + Storage Rules
-- **Agent config:**
-  `%LOCALAPPDATA%\DadBoard\Agent\agent.config.json`
-- **Leader config:**
-  `%LOCALAPPDATA%\DadBoard\Leader\leader.config.json`
-- **Logs / diagnostics (preferred):**
-  `C:\ProgramData\DadBoard\logs\`
-  `C:\ProgramData\DadBoard\diag\`
+### 0.5 Config and Storage Rules
+- Agent config:
+  `%LOCALAPPDATA%\\DadBoard\\Agent\\agent.config.json`
+- Leader config:
+  `%LOCALAPPDATA%\\DadBoard\\Leader\\leader.config.json`
+- Logs and diagnostics (preferred):
+  `C:\\ProgramData\\DadBoard\\logs\\`
+  `C:\\ProgramData\\DadBoard\\diag\\`
 - If ProgramData fails:
   - Fallback to LocalAppData automatically
   - Never crash due to permissions
@@ -61,7 +61,7 @@ At the end of **every completed task**:
 ## 1. ARCHITECTURE OVERVIEW
 
 ### 1.1 Agent (runs on every PC)
-- UDP broadcast discovery (“hello”)
+- UDP broadcast discovery ("hello")
 - WebSocket server (Kestrel, `0.0.0.0`)
 - Executes commands (launch, future voice control)
 - Always-on background tray app
@@ -74,12 +74,12 @@ At the end of **every completed task**:
 
 ### 1.3 Installation Model
 - ONE executable (`DadBoard.exe`)
-- User runs EXE → chooses Install
+- User runs EXE -> chooses Install
 - Installer:
   - Elevates once
   - Installs to Program Files
   - Sets up agent auto-start
-  - Shows progress + success confirmation
+  - Shows progress and success confirmation
 - No PS1 required for normal use
 
 ---
@@ -88,7 +88,7 @@ At the end of **every completed task**:
 
 ---
 
-## PHASE 1 — SPINE MVP (DONE / STABILIZING)
+## PHASE 1 - SPINE MVP (DONE / STABILIZING)
 
 ### Goal
 Prove the orchestration spine works end-to-end.
@@ -97,7 +97,7 @@ Prove the orchestration spine works end-to-end.
 - Agent + Leader
 - UDP discovery
 - WebSocket command channel (Kestrel)
-- Remote “Open Notepad” works
+- Remote "Open Notepad" works
 - Single-file installer exists
 
 ### Remaining cleanup
@@ -112,15 +112,15 @@ Prove the orchestration spine works end-to-end.
 
 ---
 
-## PHASE 2 — UX + RELIABILITY HARDENING (CURRENT)
+## PHASE 2 - UX + RELIABILITY HARDENING (CURRENT)
 
-### Phase 2.0 — Operator Control
+### Phase 2.0 - Operator Control
 **Goal:** Recover gracefully from hiccups.
 
 Deliverables:
-- Launch on **Selected PC**
-- Launch on **All**
-- Optional: Launch on **Online Only**
+- Launch on Selected PC
+- Launch on All
+- Optional: Launch on Online Only
 - Grid shows:
   - Online/offline
   - Command status
@@ -132,11 +132,11 @@ Deliverables:
   - View last error
 
 Exit:
-- One PC hiccup doesn’t require restarting everything
+- One PC hiccup does not require restarting everything
 
 ---
 
-### Phase 2.1 — Leader Lifecycle Stability
+### Phase 2.1 - Leader Lifecycle Stability
 **Goal:** Make leader feel persistent and calm.
 
 Deliverables:
@@ -153,7 +153,7 @@ Exit:
 
 ---
 
-### Phase 2.2 — Reconnect + Aging
+### Phase 2.2 - Reconnect + Aging
 **Goal:** Handle restarts naturally.
 
 Deliverables:
@@ -162,14 +162,14 @@ Deliverables:
 - No UI hangs from refresh timers
 
 Exit:
-- Reboot an agent PC → leader recovers automatically
+- Reboot an agent PC -> leader recovers automatically
 
 ---
 
-## PHASE 3 — GAME LAUNCH MVP
+## PHASE 3 - GAME LAUNCH MVP
 
 ### Goal
-Replace “Notepad” with real games.
+Replace "Notepad" with real games.
 
 Deliverables:
 - Game list (config or hardcoded initially)
@@ -186,7 +186,7 @@ Exit:
 
 ---
 
-## PHASE 4 — VOICE SKELETON (NO DSP YET)
+## PHASE 4 - VOICE SKELETON (NO DSP YET)
 
 ### Goal
 Define structure without hard audio work.
@@ -202,10 +202,10 @@ Exit:
 
 ---
 
-## PHASE 5 — FLOOR GATE (STANDALONE)
+## PHASE 5 - FLOOR GATE (STANDALONE)
 
 ### Goal
-Solve mic “doubling” in isolation.
+Solve mic "doubling" in isolation.
 
 Deliverables:
 - GateAgent tray app
@@ -213,7 +213,7 @@ Deliverables:
   - Leader
   - Co-captain
   - Normal
-- 5% volume floor gating
+- 5 percent volume floor gating
 - LAN coordination
 - Status output (`status.json` or IPC)
 
@@ -225,7 +225,7 @@ Exit:
 
 ---
 
-## PHASE 6 — INTEGRATION (VOICE + FLOOR GATE)
+## PHASE 6 - INTEGRATION (VOICE + FLOOR GATE)
 
 ### Goal
 Combine the superpowers.
@@ -240,7 +240,7 @@ Exit:
 
 ---
 
-## PHASE 7 — POLISH & QUALITY OF LIFE
+## PHASE 7 - POLISH AND QUALITY OF LIFE
 
 Examples:
 - Remote install
@@ -253,20 +253,20 @@ Only after core is rock solid.
 
 ---
 
-## 3. DECISION TREE (DEBUGGING & CHANGES)
+## 3. DECISION TREE (DEBUGGING AND CHANGES)
 
 ### Install issues
-- Installer closes silently → add success screen
-- Installer hangs → check install log + readiness handshake
-- Agent crashes on startup → check config path & permissions
+- Installer closes silently -> add success screen
+- Installer hangs -> check install log + readiness handshake
+- Agent crashes on startup -> check config path and permissions
 
 ### Networking
-- Discovery but no WS → firewall or wrong bind address
-- WS but no command → agent execution path
+- Discovery but no WS -> firewall or wrong bind address
+- WS but no command -> agent execution path
 
 ### UI
-- Closing dashboard causes crash → timers not stopped or hide vs close bug
-- Grid crash → ensure columns exist, guard RefreshGrid
+- Closing dashboard causes crash -> timers not stopped or hide vs close bug
+- Grid crash -> ensure columns exist, guard RefreshGrid
 
 ---
 
@@ -283,15 +283,15 @@ Only after core is rock solid.
 - Tray always shows correct state
 
 ### Stability
-- Restart agent PC → reconnect
+- Restart agent PC -> reconnect
 - No duplicate tray icons
-- No “Not Responding” windows
+- No "Not Responding" windows
 
 ---
 
 ## 5. CURRENT NEXT TASK
 
-**Phase 2.0 — Operator Control**
+**Phase 2.0 - Operator Control**
 - Add Launch on Selected PC
 - Add context menu
 - Improve grid visibility
