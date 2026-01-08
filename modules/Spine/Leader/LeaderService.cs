@@ -399,6 +399,7 @@ public sealed class LeaderService : IDisposable
     {
         try
         {
+            Directory.CreateDirectory(DadBoardPaths.UpdateSourceDir);
             var builder = WebApplication.CreateBuilder();
             builder.WebHost.UseUrls($"http://0.0.0.0:{_config.UpdatePort}");
             var app = builder.Build();
@@ -1032,15 +1033,15 @@ public sealed class LeaderService : IDisposable
         }
 
         var correlationId = Guid.NewGuid().ToString("N");
-        var baseUrl = GetUpdateBaseUrl(agent);
-        var payload = new UpdateSelfCommand
+        var manifestUrl = $"{GetUpdateBaseUrl(agent)}/updates/latest.json";
+        var payload = new TriggerUpdateNowCommand
         {
-            UpdateBaseUrl = baseUrl
+            ManifestUrl = manifestUrl
         };
 
         var envelope = new
         {
-            type = ProtocolConstants.TypeCommandUpdateSelf,
+            type = ProtocolConstants.TypeCommandTriggerUpdateNow,
             correlationId,
             pcId = agent.PcId,
             payload,
@@ -1051,8 +1052,8 @@ public sealed class LeaderService : IDisposable
         var buffer = Encoding.UTF8.GetBytes(json);
 
         agent.UpdateStatus = "sent";
-        agent.UpdateMessage = $"Update requested via {baseUrl}";
-        _logger.Info($"Sending UpdateSelf to pcId={agent.PcId} ip={agent.Ip} ws={agent.WsPort} base={baseUrl} corr={correlationId}");
+        agent.UpdateMessage = $"Update requested via {manifestUrl}";
+        _logger.Info($"Sending TriggerUpdateNow to pcId={agent.PcId} ip={agent.Ip} ws={agent.WsPort} manifest={manifestUrl} corr={correlationId}");
 
         try
         {
@@ -1062,7 +1063,7 @@ public sealed class LeaderService : IDisposable
         {
             agent.UpdateStatus = "failed";
             agent.UpdateMessage = ex.Message;
-            _logger.Warn($"UpdateSelf send failed for {agent.Name}: {ex.Message}");
+            _logger.Warn($"TriggerUpdateNow send failed for {agent.Name}: {ex.Message}");
         }
     }
 

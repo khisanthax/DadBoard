@@ -1,4 +1,6 @@
 using System;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -20,6 +22,12 @@ static class Program
             var logger = new SetupLogger();
             var result = Task.Run(() =>
                 SetupOperations.RunAsync(action.Value, manifestUrl, logger, null, default)).GetAwaiter().GetResult();
+
+            if (result.Success && action.Value != SetupAction.Uninstall)
+            {
+                LaunchInstalledApp();
+            }
+
             return result.Success ? 0 : 2;
         }
 
@@ -66,5 +74,22 @@ static class Program
         }
 
         return null;
+    }
+
+    private static void LaunchInstalledApp()
+    {
+        if (!File.Exists(DadBoardPaths.InstalledExePath))
+        {
+            return;
+        }
+
+        var startInfo = new ProcessStartInfo(
+            DadBoardPaths.InstalledExePath,
+            "--mode agent --minimized")
+        {
+            UseShellExecute = true,
+            WorkingDirectory = Path.GetDirectoryName(DadBoardPaths.InstalledExePath)
+        };
+        Process.Start(startInfo);
     }
 }

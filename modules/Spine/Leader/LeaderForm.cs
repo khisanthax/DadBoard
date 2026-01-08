@@ -1318,7 +1318,9 @@ public sealed class LeaderForm : Form
 
         return status.ToLowerInvariant() switch
         {
+            "starting" => "Starting",
             "downloading" => "Downloading",
+            "installing" => "Installing",
             "applying" => "Applying",
             "restarting" => "Restarting",
             "failed" => "Failed",

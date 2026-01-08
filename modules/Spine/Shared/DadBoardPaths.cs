@@ -25,4 +25,6 @@ public static class DadBoardPaths
 
     public static string SetupLogDir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DadBoard", "logs");
+
+    public static string SetupExePath => Path.Combine(InstallDir, "DadBoardSetup.exe");
 }
