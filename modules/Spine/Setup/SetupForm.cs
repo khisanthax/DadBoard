@@ -120,9 +120,8 @@ public sealed class SetupForm : Form
                 "DadBoard Setup",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
-            _installButton.Enabled = false;
-            _updateButton.Enabled = false;
-            _uninstallButton.Enabled = false;
+
+            TryFallbackLogger();
         }
 
         ShowActionsView("startup");
@@ -185,11 +184,39 @@ public sealed class SetupForm : Form
 
     private void UpdateActionButtons()
     {
-        var installed = File.Exists(DadBoardPaths.InstalledExePath);
-        var loggingReady = _logger != null;
-        _installButton.Enabled = !_busy && !installed && loggingReady;
-        _updateButton.Enabled = !_busy && installed && loggingReady;
-        _uninstallButton.Enabled = !_busy && installed && loggingReady;
+        var canonicalExists = File.Exists(DadBoardPaths.InstalledExePath);
+        var legacyExists = File.Exists(DadBoardPaths.LegacyInstallExePath);
+        var canonicalRunnable = IsCanonicalRunnable(out var canonicalReason);
+        var updateSourceConfigured = IsUpdateSourceConfigured();
+
+        var installEnabled = !_busy && !canonicalRunnable;
+        var updateEnabled = !_busy && canonicalRunnable && updateSourceConfigured;
+        var uninstallEnabled = !_busy && canonicalRunnable;
+        var startEnabled = canonicalRunnable;
+
+        _installButton.Enabled = installEnabled;
+        _updateButton.Enabled = updateEnabled;
+        _uninstallButton.Enabled = uninstallEnabled;
+        _startButton.Enabled = startEnabled;
+
+        if (!canonicalRunnable && (Directory.Exists(DadBoardPaths.InstallDir) || legacyExists))
+        {
+            _installButton.Text = "Repair";
+        }
+        else
+        {
+            _installButton.Text = "Install";
+        }
+
+        var installReason = installEnabled
+            ? "needs_install_or_repair"
+            : canonicalRunnable ? "installed_and_runnable" : "busy";
+
+        var startReason = startEnabled ? "runnable" : canonicalReason;
+
+        _logger?.Info($"canonical_exists={canonicalExists} legacy_exists={legacyExists} initial_view={( _finalPanel.Visible ? "Final" : "Actions")} reason=update_buttons");
+        _logger?.Info($"install_enabled={installEnabled} reason={installReason}");
+        _logger?.Info($"start_enabled={startEnabled} reason={startReason}");
     }
 
     private void ShowActionsView(string reason)
@@ -234,6 +261,69 @@ public sealed class SetupForm : Form
     private void AppendLog(string message)
     {
         _logBox.AppendText($"{DateTime.Now:HH:mm:ss} {message}{Environment.NewLine}");
+    }
+
+    private bool IsCanonicalRunnable(out string reason)
+    {
+        reason = "missing_exe";
+        try
+        {
+            if (!File.Exists(DadBoardPaths.InstalledExePath))
+            {
+                return false;
+            }
+
+            var info = new FileInfo(DadBoardPaths.InstalledExePath);
+            if (info.Length <= 0)
+            {
+                reason = "empty_file";
+                return false;
+            }
+
+            FileVersionInfo.GetVersionInfo(DadBoardPaths.InstalledExePath);
+            reason = "runnable";
+            return true;
+        }
+        catch (Exception ex)
+        {
+            reason = $"invalid_exe:{ex.Message}";
+            return false;
+        }
+    }
+
+    private bool IsUpdateSourceConfigured()
+    {
+        var config = UpdateConfigStore.Load();
+        if (!string.IsNullOrWhiteSpace(config.ManifestUrl))
+        {
+            return true;
+        }
+
+        var localManifest = Path.Combine(DadBoardPaths.UpdateSourceDir, "latest.json");
+        return File.Exists(localManifest);
+    }
+
+    private void TryFallbackLogger()
+    {
+        try
+        {
+            var fallbackDir = Path.Combine(Path.GetTempPath(), "DadBoardSetup");
+            Directory.CreateDirectory(fallbackDir);
+            var fallbackPath = Path.Combine(fallbackDir, "setup.log");
+            _logger = new SetupLogger(fallbackPath);
+            AppendLog($"Log file (fallback): {_logger.LogPath}");
+            _statusLabel.Text = "Logging fallback enabled. Setup can continue.";
+        }
+        catch (Exception ex)
+        {
+            _logger = null;
+            _statusLabel.Text = $"Logging failed: {ex.Message}";
+            MessageBox.Show(
+                $"Setup cannot open any log file.{Environment.NewLine}{ex.Message}",
+                "DadBoard Setup",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+        }
     }
 
     protected override void OnFormClosed(FormClosedEventArgs e)
