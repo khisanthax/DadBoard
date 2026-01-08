@@ -19,16 +19,33 @@ static class Program
 
         if (silent && action.HasValue)
         {
-            var logger = new SetupLogger();
-            var result = Task.Run(() =>
-                SetupOperations.RunAsync(action.Value, manifestUrl, logger, null, default)).GetAwaiter().GetResult();
-
-            if (result.Success && action.Value != SetupAction.Uninstall)
+            SetupLogger logger;
+            try
             {
-                LaunchInstalledApp();
+                logger = new SetupLogger();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"Setup logging failed: {ex.Message}",
+                    "DadBoard Setup",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+                return 3;
             }
 
-            return result.Success ? 0 : 2;
+            using (logger)
+            {
+                var result = Task.Run(() =>
+                    SetupOperations.RunAsync(action.Value, manifestUrl, logger, null, default)).GetAwaiter().GetResult();
+
+                if (result.Success && action.Value != SetupAction.Uninstall)
+                {
+                    LaunchInstalledApp();
+                }
+
+                return result.Success ? 0 : 2;
+            }
         }
 
         ApplicationConfiguration.Initialize();

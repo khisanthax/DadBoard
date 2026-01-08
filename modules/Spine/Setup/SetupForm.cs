@@ -18,7 +18,7 @@ public sealed class SetupForm : Form
     private readonly Button _uninstallButton = new();
     private readonly Button _startButton = new();
     private readonly Button _closeButton = new();
-    private readonly SetupLogger _logger = new();
+    private SetupLogger? _logger;
     private readonly CancellationTokenSource _cts = new();
 
     private bool _busy;
@@ -108,8 +108,25 @@ public sealed class SetupForm : Form
 
         FormClosed += (_, _) => _cts.Cancel();
 
+        try
+        {
+            _logger = new SetupLogger();
+            AppendLog($"Log file: {_logger.LogPath}");
+        }
+        catch (Exception ex)
+        {
+            _statusLabel.Text = $"Logging failed: {ex.Message}";
+            MessageBox.Show(
+                $"Setup cannot open log file.{Environment.NewLine}{ex.Message}",
+                "DadBoard Setup",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+            _installButton.Enabled = false;
+            _updateButton.Enabled = false;
+            _uninstallButton.Enabled = false;
+        }
+
         UpdateActionButtons();
-        AppendLog($"Log file: {_logger.LogPath}");
     }
 
     private async Task RunActionAsync(SetupAction action)
@@ -122,6 +139,14 @@ public sealed class SetupForm : Form
         _busy = true;
         UpdateActionButtons();
         _startButton.Enabled = false;
+
+        if (_logger == null)
+        {
+            MessageBox.Show("Logging is not available. Setup cannot continue.", "DadBoard Setup", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            _busy = false;
+            UpdateActionButtons();
+            return;
+        }
 
         var progress = new Progress<string>(message =>
         {
@@ -152,9 +177,10 @@ public sealed class SetupForm : Form
     private void UpdateActionButtons()
     {
         var installed = File.Exists(DadBoardPaths.InstalledExePath);
-        _installButton.Enabled = !_busy && !installed;
-        _updateButton.Enabled = !_busy && installed;
-        _uninstallButton.Enabled = !_busy && installed;
+        var loggingReady = _logger != null;
+        _installButton.Enabled = !_busy && !installed && loggingReady;
+        _updateButton.Enabled = !_busy && installed && loggingReady;
+        _uninstallButton.Enabled = !_busy && installed && loggingReady;
     }
 
     private void LaunchInstalledApp()
@@ -171,5 +197,11 @@ public sealed class SetupForm : Form
     private void AppendLog(string message)
     {
         _logBox.AppendText($"{DateTime.Now:HH:mm:ss} {message}{Environment.NewLine}");
+    }
+
+    protected override void OnFormClosed(FormClosedEventArgs e)
+    {
+        _logger?.Dispose();
+        base.OnFormClosed(e);
     }
 }
