@@ -247,23 +247,31 @@ public sealed class LeaderService : IDisposable
         return true;
     }
 
-    public bool LaunchAppIdOnAgent(int appId, string pcId, out string? error)
+    public async Task<(bool Ok, string? Error)> LaunchAppIdOnAgentAsync(int appId, string pcId)
     {
-        error = null;
         if (!_agents.TryGetValue(pcId, out var agent))
         {
-            error = "Agent not found.";
-            return false;
+            return (false, "Agent not found.");
         }
 
         if (!agent.Online)
         {
-            error = "Agent is offline.";
-            return false;
+            return (false, "Agent is offline.");
         }
 
-        _ = Task.Run(() => SendLaunchAppId(agent, appId));
-        return true;
+        try
+        {
+            return await SendLaunchAppId(agent, appId).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            agent.LastStatus = "failed";
+            agent.LastStatusMessage = ex.Message;
+            agent.LastResult = "Failed";
+            agent.LastError = ex.Message;
+            _logger.Error($"LaunchGame failed for {agent.Name}: {ex}");
+            return (false, ex.Message);
+        }
     }
 
     public void LaunchAppIdOnAgents(int appId, IEnumerable<string> pcIds)
@@ -272,7 +280,7 @@ public sealed class LeaderService : IDisposable
         {
             if (_agents.TryGetValue(pcId, out var agent) && agent.Online)
             {
-                _ = Task.Run(() => SendLaunchAppId(agent, appId));
+                _ = Task.Run(async () => await SendLaunchAppId(agent, appId).ConfigureAwait(false));
             }
         }
     }
@@ -588,11 +596,12 @@ public sealed class LeaderService : IDisposable
 
         agent.LastCommandId = correlationId;
         agent.LastCommandTs = DateTime.UtcNow;
-        agent.LastStatus = "sent";
-        agent.LastStatusMessage = $"Sent {game.Name}";
+        agent.LastStatus = "launching";
+        agent.LastStatusMessage = $"Launching {game.Name}";
         agent.LastResult = "Pending";
         agent.LastError = "";
         StartTimeout(agent.PcId, correlationId);
+        _logger.Info($"Launch requested gameId={game.Id} name={game.Name} pcId={agent.PcId} ip={agent.Ip} ws={agent.WsPort} corr={correlationId}");
 
         try
         {
@@ -604,10 +613,11 @@ public sealed class LeaderService : IDisposable
             agent.LastStatusMessage = ex.Message;
             agent.LastResult = "Failed";
             agent.LastError = ex.Message;
+            _logger.Error($"LaunchGame send failed for {agent.Name}: {ex}");
         }
     }
 
-    private async Task SendLaunchAppId(AgentInfo agent, int appId)
+    private async Task<(bool Ok, string? Error)> SendLaunchAppId(AgentInfo agent, int appId)
     {
         var connection = await EnsureConnection(agent).ConfigureAwait(false);
         if (connection == null || connection.Socket.State != WebSocketState.Open)
@@ -616,7 +626,8 @@ public sealed class LeaderService : IDisposable
             agent.LastStatusMessage = connection?.LastError ?? "Unable to connect";
             agent.LastResult = "Failed";
             agent.LastError = agent.LastStatusMessage;
-            return;
+            _logger.Warn($"LaunchGame failed for {agent.Name}: {agent.LastStatusMessage}");
+            return (false, agent.LastStatusMessage);
         }
 
         var correlationId = Guid.NewGuid().ToString("N");
@@ -641,15 +652,17 @@ public sealed class LeaderService : IDisposable
 
         agent.LastCommandId = correlationId;
         agent.LastCommandTs = DateTime.UtcNow;
-        agent.LastStatus = "sent";
-        agent.LastStatusMessage = $"Sent app {appId}";
+        agent.LastStatus = "launching";
+        agent.LastStatusMessage = $"Launching app {appId}";
         agent.LastResult = "Pending";
         agent.LastError = "";
         StartTimeout(agent.PcId, correlationId);
+        _logger.Info($"Launch requested appId={appId} pcId={agent.PcId} ip={agent.Ip} ws={agent.WsPort} corr={correlationId}");
 
         try
         {
             await connection.Socket.SendAsync(buffer, WebSocketMessageType.Text, true, _cts.Token).ConfigureAwait(false);
+            return (true, null);
         }
         catch (Exception ex)
         {
@@ -657,7 +670,16 @@ public sealed class LeaderService : IDisposable
             agent.LastStatusMessage = ex.Message;
             agent.LastResult = "Failed";
             agent.LastError = ex.Message;
+            _logger.Error($"LaunchGame send failed for {agent.Name}: {ex}");
+            return (false, ex.Message);
         }
+    }
+
+    public void LogLaunchRequest(int appId, string gameName, IEnumerable<string> pcIds)
+    {
+        var targets = string.Join(",", pcIds);
+        var gameId = appId.ToString();
+        _logger.Info($"Launch requested gameId={gameId} name={gameName} appId={appId} targets=[{targets}]");
     }
 
     private async Task SendLaunchExe(AgentInfo agent, string exePath)
@@ -811,9 +833,11 @@ public sealed class LeaderService : IDisposable
                 if (agent.LastStatus != "running" && agent.LastStatus != "failed")
                 {
                     agent.LastStatus = "timeout";
-                    agent.LastStatusMessage = "Command timeout.";
+                    var noAck = agent.LastAckTs == default || agent.LastAckTs < agent.LastCommandTs;
+                    agent.LastStatusMessage = noAck ? "No response from agent." : "Command timeout.";
                     agent.LastResult = "Timed out";
                     agent.LastError = agent.LastStatusMessage;
+                    _logger.Warn($"Command timeout pcId={pcId} corr={correlationId} noAck={noAck}");
                 }
             }
         }, null, TimeSpan.FromSeconds(_config.CommandTimeoutSec), Timeout.InfiniteTimeSpan);

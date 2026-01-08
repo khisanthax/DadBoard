@@ -249,6 +249,7 @@ public sealed class AgentService : IDisposable
                 return;
             }
 
+            _logger.Info($"Received LaunchGame corr={envelope.CorrelationId} gameId={command.GameId} url={command.LaunchUrl}");
             _state.LastCommandId = envelope.CorrelationId;
             _state.LastCommandType = envelope.Type;
             _state.LastCommandTs = DateTime.UtcNow.ToString("O");
@@ -349,15 +350,18 @@ public sealed class AgentService : IDisposable
             if (ready)
             {
                 SendStatus(correlationId, "running", command.GameId, "Game running.");
+                _logger.Info($"LaunchGame running corr={correlationId} gameId={command.GameId}.");
             }
             else
             {
                 SendStatus(correlationId, "failed", command.GameId, "TIMEOUT waiting for game process.");
+                _logger.Warn($"LaunchGame timeout corr={correlationId} gameId={command.GameId}.");
             }
         }
         catch (Exception ex)
         {
             SendStatus(correlationId, "failed", command.GameId, ex.Message);
+            _logger.Error($"LaunchGame failed corr={correlationId}: {ex.Message}");
         }
     }
 

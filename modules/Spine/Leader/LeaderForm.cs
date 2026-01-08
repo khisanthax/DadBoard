@@ -53,6 +53,8 @@ public sealed class LeaderForm : Form
     private int _refreshing;
     private bool _gamesDirty = true;
     private bool _allowClose;
+    private HashSet<string>? _pendingLaunchTargets;
+    private int? _pendingLaunchAppId;
 
     public LeaderForm(LeaderService service)
     {
@@ -152,7 +154,7 @@ public sealed class LeaderForm : Form
         _launchOnSelectedAgentButton.Text = "Launch selected game";
         _launchOnSelectedAgentButton.Height = 32;
         _launchOnSelectedAgentButton.Enabled = false;
-        _launchOnSelectedAgentButton.Click += (_, _) => LaunchSelectedGameOnAgentFromMenu();
+        _launchOnSelectedAgentButton.Click += async (_, _) => await LaunchSelectedGameOnAgentFromMenu();
 
         _testButton.Text = "Test: Open Notepad";
         _testButton.Height = 32;
@@ -282,7 +284,7 @@ public sealed class LeaderForm : Form
         _launchGameButton.Text = "Launch Game";
         _launchGameButton.Height = 32;
         _launchGameButton.Enabled = false;
-        _launchGameButton.Click += (_, _) => LaunchSelectedGameOnTargets();
+        _launchGameButton.Click += async (_, _) => await LaunchSelectedGameOnTargets();
 
         _selectAllAvailableButton.Text = "Select all available PCs";
         _selectAllAvailableButton.Height = 32;
@@ -338,7 +340,7 @@ public sealed class LeaderForm : Form
 
             UpdateContextMenuState();
         };
-        _menuLaunch.Click += (_, _) => LaunchSelectedGameOnAgentFromMenu();
+        _menuLaunch.Click += async (_, _) => await LaunchSelectedGameOnAgentFromMenu();
         _menuTest.Click += (_, _) => SendTestCommand();
         _menuCopyPcId.Click += (_, _) => CopySelectedAgentValue("pcId");
         _menuCopyIp.Click += (_, _) => CopySelectedAgentValue("ip");
@@ -448,6 +450,7 @@ public sealed class LeaderForm : Form
             }
 
             UpdateAgentActions();
+            UpdateLaunchProgress(snapshot);
             var onlineSummary = $"Agents online: {snapshot.Count(a => a.Online)} / {snapshot.Count}";
             var selectedFailure = GetSelectedAgentFailureMessage();
             _statusLabel.Text = string.IsNullOrWhiteSpace(selectedFailure) ? onlineSummary : selectedFailure;
@@ -636,7 +639,7 @@ public sealed class LeaderForm : Form
         Task.Run(() => _service.RefreshSteamInventory());
     }
 
-    private void LaunchSelectedGameOnTargets()
+    private async Task LaunchSelectedGameOnTargets()
     {
         var selection = GetSelectedGame();
         if (selection == null)
@@ -648,12 +651,57 @@ public sealed class LeaderForm : Form
         var checkedPcs = GetCheckedTargetPcIds();
         if (checkedPcs.Count == 0)
         {
-            MessageBox.Show("Check at least one PC for this game.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show("Select at least one target PC for this game.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            _statusLabel.Text = "Launch failed: no target PCs selected.";
             return;
         }
 
-        _service.LaunchAppIdOnAgents(selection.Value.AppId, checkedPcs);
-        _statusLabel.Text = $"Launch triggered: {selection.Value.Name} ({checkedPcs.Count} PCs)";
+        _service.LogLaunchRequest(selection.Value.AppId, selection.Value.Name, checkedPcs);
+        _launchGameButton.Enabled = false;
+        _statusLabel.Text = $"Launching {selection.Value.Name} on {checkedPcs.Count} PC(s)...";
+
+        var failures = new List<string>();
+        var successes = new List<string>();
+        foreach (var pcId in checkedPcs)
+        {
+            var result = await _service.LaunchAppIdOnAgentAsync(selection.Value.AppId, pcId);
+            if (!result.Ok)
+            {
+                failures.Add($"{pcId}: {result.Error ?? "Unknown error"}");
+                continue;
+            }
+
+            successes.Add(pcId);
+        }
+
+        if (successes.Count == 0)
+        {
+            var message = "Launch failed: no targets accepted the command.";
+            if (failures.Count > 0)
+            {
+                message = $"Launch failed:{Environment.NewLine}{string.Join(Environment.NewLine, failures)}";
+            }
+
+            MessageBox.Show(message, "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            _statusLabel.Text = "Launch failed: no targets accepted the command.";
+            UpdateGameActions();
+            return;
+        }
+
+        _pendingLaunchTargets = new HashSet<string>(successes, StringComparer.OrdinalIgnoreCase);
+        _pendingLaunchAppId = selection.Value.AppId;
+        _statusLabel.Text = $"Launching {selection.Value.Name} on {successes.Count} PC(s)...";
+        UpdateGameActions();
+        RefreshAgentsGridSafe();
+
+        if (failures.Count > 0)
+        {
+            MessageBox.Show(
+                $"Some targets failed to accept the command:{Environment.NewLine}{string.Join(Environment.NewLine, failures)}",
+                "DadBoard",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
     }
 
     private void SelectAllAvailableForSelectedGame()
@@ -676,7 +724,7 @@ public sealed class LeaderForm : Form
         UpdateGameActions();
     }
 
-    private void LaunchSelectedGameOnAgentFromMenu()
+    private async Task LaunchSelectedGameOnAgentFromMenu()
     {
         var selection = GetSelectedGame();
         if (selection == null)
@@ -692,13 +740,14 @@ public sealed class LeaderForm : Form
             return;
         }
 
-        if (!_service.LaunchAppIdOnAgent(selection.Value.AppId, pcId, out var error))
+        var result = await _service.LaunchAppIdOnAgentAsync(selection.Value.AppId, pcId);
+        if (!result.Ok)
         {
-            MessageBox.Show(error ?? "Unable to launch on selected PC.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(result.Error ?? "Unable to launch on selected PC.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
-        _statusLabel.Text = $"Launch triggered: {selection.Value.Name} (selected PC)";
+        _statusLabel.Text = $"Launching {selection.Value.Name} on {pcId}...";
     }
     private void SendTestCommand()
     {
@@ -1114,9 +1163,41 @@ public sealed class LeaderForm : Form
         }
 
         var checkedTargets = GetCheckedTargetPcIds();
-        _launchGameButton.Enabled = checkedTargets.Count > 0;
+        _launchGameButton.Enabled = checkedTargets.Count > 0 && _pendingLaunchTargets == null;
         _selectAllAvailableButton.Enabled = _targetCheckboxes.Values.Any(cb => cb.Enabled);
         UpdateAgentActions();
+    }
+
+    private void UpdateLaunchProgress(IReadOnlyList<AgentInfo> snapshot)
+    {
+        if (_pendingLaunchTargets == null || _pendingLaunchTargets.Count == 0)
+        {
+            return;
+        }
+
+        var targets = snapshot.Where(agent => _pendingLaunchTargets.Contains(agent.PcId)).ToList();
+        if (targets.Count == 0)
+        {
+            _pendingLaunchTargets = null;
+            _pendingLaunchAppId = null;
+            UpdateGameActions();
+            return;
+        }
+
+        var allDone = targets.All(agent => IsTerminalLaunchStatus(agent.LastStatus));
+        if (allDone)
+        {
+            _pendingLaunchTargets = null;
+            _pendingLaunchAppId = null;
+            UpdateGameActions();
+        }
+    }
+
+    private static bool IsTerminalLaunchStatus(string status)
+    {
+        return string.Equals(status, "running", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(status, "timeout", StringComparison.OrdinalIgnoreCase);
     }
 
     private void AgentsGridMouseDown(object? sender, MouseEventArgs e)
@@ -1221,7 +1302,7 @@ public sealed class LeaderForm : Form
             "ws_error" => "Failed",
             "sent" => "Running",
             "received" => "Running",
-            "launching" => "Running",
+            "launching" => "Launching",
             "stopping" => "Running",
             _ => "Idle"
         };
