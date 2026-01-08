@@ -206,8 +206,8 @@ public sealed class LeaderForm : Form
         };
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         var actions = new FlowLayoutPanel
         {
@@ -258,7 +258,8 @@ public sealed class LeaderForm : Form
         {
             Text = "Launch targets",
             Dock = DockStyle.Fill,
-            AutoSize = true
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink
         };
 
         var launchLayout = new TableLayoutPanel
@@ -303,8 +304,8 @@ public sealed class LeaderForm : Form
 
         panel.Controls.Add(actions, 0, 0);
         panel.Controls.Add(filterGroup, 0, 1);
-        panel.Controls.Add(BuildGamesGrid(), 0, 2);
-        panel.Controls.Add(launchGroup, 0, 3);
+        panel.Controls.Add(launchGroup, 0, 2);
+        panel.Controls.Add(BuildGamesGrid(), 0, 3);
         return panel;
     }
     private Control BuildAgentsGrid()
