@@ -23,6 +23,7 @@ sealed class TrayAppContext : ApplicationContext
     private LeaderService? _leader;
     private LeaderForm? _leaderForm;
     private StatusForm? _statusForm;
+    private DiagnosticsForm? _diagnosticsForm;
 
     private readonly NotifyIcon _tray;
     private readonly ToolStripMenuItem _enableLeaderItem;
@@ -31,6 +32,7 @@ sealed class TrayAppContext : ApplicationContext
     private readonly ToolStripMenuItem _startLeaderOnLoginItem;
     private readonly ToolStripMenuItem _installItem;
     private readonly ToolStripMenuItem _statusItem;
+    private readonly ToolStripMenuItem _diagnosticsItem;
 
     private readonly AppLaunchOptions _options;
     private AgentConfig _config;
@@ -64,6 +66,7 @@ sealed class TrayAppContext : ApplicationContext
 
         _installItem = new ToolStripMenuItem("Install (Admin)", null, (_, _) => Install());
         _statusItem = new ToolStripMenuItem("Show Status", null, (_, _) => ShowStatus());
+        _diagnosticsItem = new ToolStripMenuItem("Diagnostics", null, (_, _) => ShowDiagnostics());
 
         var menu = new ContextMenuStrip();
         menu.Items.AddRange(new ToolStripItem[]
@@ -75,6 +78,7 @@ sealed class TrayAppContext : ApplicationContext
             _startLeaderOnLoginItem,
             _installItem,
             _statusItem,
+            _diagnosticsItem,
             new ToolStripSeparator(),
             new ToolStripMenuItem("Exit", null, (_, _) => Exit())
         });
@@ -175,6 +179,22 @@ sealed class TrayAppContext : ApplicationContext
         _statusForm.BringToFront();
     }
 
+    private void ShowDiagnostics()
+    {
+        if (_diagnosticsForm == null || _diagnosticsForm.IsDisposed)
+        {
+            _diagnosticsForm = new DiagnosticsForm(_leader);
+            _diagnosticsForm.FormClosed += (_, _) => _diagnosticsForm = null;
+        }
+        else
+        {
+            _diagnosticsForm.UpdateSnapshot(_leader);
+        }
+
+        _diagnosticsForm.Show();
+        _diagnosticsForm.BringToFront();
+    }
+
     public void HandleActivateSignal()
     {
         _uiContext.Post(_ => ShowStatus(), null);
@@ -264,6 +284,7 @@ sealed class TrayAppContext : ApplicationContext
         _leaderForm?.AllowClose();
         _leaderForm?.Close();
         _statusForm?.Close();
+        _diagnosticsForm?.Close();
         _leader?.Dispose();
         Dispose();
         ExitThread();
