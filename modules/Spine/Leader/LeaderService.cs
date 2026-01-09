@@ -592,6 +592,7 @@ public sealed class LeaderService : IDisposable
                 .Where(name => !string.IsNullOrWhiteSpace(name)));
 
             _logger.Info($"Update mirror: cached {version} and wrote local manifest.");
+            BroadcastUpdateSource();
         }
         catch (Exception ex)
         {
@@ -1262,15 +1263,15 @@ public sealed class LeaderService : IDisposable
         }
 
         var correlationId = Guid.NewGuid().ToString("N");
-        var baseUrl = GetUpdateBaseUrl(agent);
-        var payload = new UpdateSelfCommand
+        var manifestUrl = GetPreferredManifestUrl(agent);
+        var payload = new TriggerUpdateNowCommand
         {
-            UpdateBaseUrl = baseUrl
+            ManifestUrl = manifestUrl
         };
 
         var envelope = new
         {
-            type = ProtocolConstants.TypeCommandUpdateSelf,
+            type = ProtocolConstants.TypeCommandTriggerUpdateNow,
             correlationId,
             pcId = agent.PcId,
             payload,
@@ -1281,8 +1282,8 @@ public sealed class LeaderService : IDisposable
         var buffer = Encoding.UTF8.GetBytes(json);
 
         agent.UpdateStatus = "sent";
-        agent.UpdateMessage = $"Update requested via {baseUrl}";
-        _logger.Info($"Sending UpdateSelf to pcId={agent.PcId} ip={agent.Ip} ws={agent.WsPort} base={baseUrl} corr={correlationId}");
+        agent.UpdateMessage = $"Update requested via {manifestUrl}";
+        _logger.Info($"Sending TriggerUpdateNow to pcId={agent.PcId} ip={agent.Ip} ws={agent.WsPort} manifest={manifestUrl} corr={correlationId}");
 
         try
         {
@@ -1292,7 +1293,77 @@ public sealed class LeaderService : IDisposable
         {
             agent.UpdateStatus = "failed";
             agent.UpdateMessage = ex.Message;
-            _logger.Warn($"UpdateSelf send failed for {agent.Name}: {ex.Message}");
+            _logger.Warn($"TriggerUpdateNow send failed for {agent.Name}: {ex.Message}");
+        }
+    }
+
+    private string GetPreferredManifestUrl(AgentInfo agent)
+    {
+        var local = GetLocalManifestUrl(agent);
+        if (!string.IsNullOrWhiteSpace(local))
+        {
+            return local;
+        }
+
+        return _updateConfig.ManifestUrl;
+    }
+
+    private string GetLocalManifestUrl(AgentInfo agent)
+    {
+        var localManifestPath = Path.Combine(DadBoardPaths.UpdateSourceDir, "latest.json");
+        if (!File.Exists(localManifestPath))
+        {
+            return "";
+        }
+
+        return $"{GetUpdateBaseUrl(agent)}/updates/latest.json";
+    }
+
+    private void BroadcastUpdateSource()
+    {
+        foreach (var entry in _connections.Values)
+        {
+            if (entry.Socket.State != WebSocketState.Open)
+            {
+                continue;
+            }
+
+            if (_agents.TryGetValue(entry.PcId, out var agent))
+            {
+                _ = Task.Run(() => SendUpdateSource(agent, entry));
+            }
+        }
+    }
+
+    private async Task SendUpdateSource(AgentInfo agent, AgentConnection connection)
+    {
+        var manifestUrl = GetLocalManifestUrl(agent);
+        var payload = new UpdateSourcePayload
+        {
+            PrimaryManifestUrl = manifestUrl,
+            FallbackManifestUrl = _updateConfig.ManifestUrl
+        };
+
+        var envelope = new
+        {
+            type = ProtocolConstants.TypeUpdateSource,
+            correlationId = Guid.NewGuid().ToString("N"),
+            pcId = agent.PcId,
+            payload,
+            ts = DateTime.UtcNow.ToString("O")
+        };
+
+        var json = JsonSerializer.Serialize(envelope, JsonUtil.Options);
+        var buffer = Encoding.UTF8.GetBytes(json);
+
+        try
+        {
+            await connection.Socket.SendAsync(buffer, WebSocketMessageType.Text, true, _cts.Token).ConfigureAwait(false);
+            _logger.Info($"Update source sent to pcId={agent.PcId} primary={payload.PrimaryManifestUrl} fallback={payload.FallbackManifestUrl}");
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn($"Update source send failed for {agent.Name}: {ex.Message}");
         }
     }
 
@@ -1314,6 +1385,7 @@ public sealed class LeaderService : IDisposable
             connection.State = "Open";
             connection.LastConnected = DateTime.UtcNow;
             _ = Task.Run(() => ReceiveLoop(connection));
+            _ = Task.Run(() => SendUpdateSource(agent, connection));
             _logger.Info($"Connected to {agent.Name} at {uri}.");
             return connection;
         }

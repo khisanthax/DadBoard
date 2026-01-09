@@ -14,6 +14,7 @@ public static class ProtocolConstants
     public const string TypeCommandScanSteamGames = "Command.ScanSteamGames";
     public const string TypeCommandUpdateSelf = "Command.UpdateSelf";
     public const string TypeCommandTriggerUpdateNow = "Command.TriggerUpdateNow";
+    public const string TypeUpdateSource = "Update.Source";
     public const string TypeSteamInventory = "SteamInventory";
     public const string TypeUpdateStatus = "UpdateStatus";
     public const string TypeAck = "Ack";
@@ -79,6 +80,12 @@ public sealed class UpdateSelfCommand
 public sealed class TriggerUpdateNowCommand
 {
     public string? ManifestUrl { get; set; }
+}
+
+public sealed class UpdateSourcePayload
+{
+    public string? PrimaryManifestUrl { get; set; }
+    public string? FallbackManifestUrl { get; set; }
 }
 
 public sealed class AckPayload

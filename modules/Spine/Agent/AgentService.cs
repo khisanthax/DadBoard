@@ -361,6 +361,23 @@ public sealed class AgentService : IDisposable
             return;
         }
 
+        if (envelope.Type == ProtocolConstants.TypeUpdateSource)
+        {
+            var payload = envelope.Payload.Deserialize<UpdateSourcePayload>(JsonUtil.Options);
+            if (payload == null)
+            {
+                SendAck(socket, envelope.CorrelationId, ok: false, "Invalid payload");
+                return;
+            }
+
+            _updateState.ManifestUrl = payload.PrimaryManifestUrl ?? "";
+            _updateState.FallbackManifestUrl = payload.FallbackManifestUrl ?? "";
+            UpdateStateStore.Save(_updateState);
+            _logger.Info($"Update source set. primary={_updateState.ManifestUrl} fallback={_updateState.FallbackManifestUrl}");
+            SendAck(socket, envelope.CorrelationId, ok: true, null);
+            return;
+        }
+
         SendAck(socket, envelope.CorrelationId, ok: false, "Unknown command");
     }
 
@@ -498,18 +515,20 @@ public sealed class AgentService : IDisposable
             }
         }
 
-        var manifestUrl = ResolveManifestUrl(manifestOverride);
-        if (string.IsNullOrWhiteSpace(manifestUrl))
+        var primaryUrl = ResolveManifestUrl(manifestOverride);
+        var fallbackUrl = GetFallbackManifestUrl(primaryUrl);
+        if (string.IsNullOrWhiteSpace(primaryUrl) && string.IsNullOrWhiteSpace(fallbackUrl))
         {
             return;
         }
 
         try
         {
-            var manifest = await LoadManifestAsync(manifestUrl).ConfigureAwait(false);
+            _logger.Info($"Update init: resolving manifest primary={primaryUrl} fallback={fallbackUrl}");
+            var (manifest, error) = await TryLoadManifestWithFallback(primaryUrl, fallbackUrl).ConfigureAwait(false);
             if (manifest == null)
             {
-                RegisterUpdateFailure("Manifest unavailable.");
+                RegisterUpdateFailure(error ?? "Manifest unavailable.");
                 return;
             }
 
@@ -518,7 +537,10 @@ public sealed class AgentService : IDisposable
             var tokenChanged = manifest.ForceCheckToken != _updateState.ForceCheckToken;
             var versionNewer = VersionUtil.Compare(latest, current) > 0;
 
-            _updateState.ManifestUrl = manifestUrl;
+            if (!string.IsNullOrWhiteSpace(primaryUrl))
+            {
+                _updateState.ManifestUrl = primaryUrl;
+            }
             _updateState.ForceCheckToken = manifest.ForceCheckToken;
             _updateState.LastCheckedUtc = DateTime.UtcNow.ToString("O");
             _updateState.LatestVersion = latest;
@@ -555,7 +577,37 @@ public sealed class AgentService : IDisposable
         }
     }
 
-    private async Task<UpdateManifest?> LoadManifestAsync(string manifestUrl)
+    private async Task<(UpdateManifest? Manifest, string? Error)> TryLoadManifestWithFallback(string primaryUrl, string fallbackUrl)
+    {
+        if (!string.IsNullOrWhiteSpace(primaryUrl))
+        {
+            var (manifest, error) = await TryLoadManifestAsync(primaryUrl).ConfigureAwait(false);
+            if (manifest != null)
+            {
+                return (manifest, null);
+            }
+
+            _logger.Warn($"Update init: primary manifest failed: {error}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(fallbackUrl) &&
+            !string.Equals(primaryUrl, fallbackUrl, StringComparison.OrdinalIgnoreCase))
+        {
+            var (manifest, error) = await TryLoadManifestAsync(fallbackUrl).ConfigureAwait(false);
+            if (manifest != null)
+            {
+                _logger.Info("Update init: fallback manifest succeeded.");
+                _updateState.ManifestUrl = fallbackUrl;
+                return (manifest, null);
+            }
+
+            return (null, error);
+        }
+
+        return (null, "Manifest unavailable.");
+    }
+
+    private async Task<(UpdateManifest? Manifest, string? Error)> TryLoadManifestAsync(string manifestUrl)
     {
         if (File.Exists(manifestUrl))
         {
@@ -564,9 +616,9 @@ public sealed class AgentService : IDisposable
             if (json == null)
             {
                 _logger.Warn("Update init: manifest read timed out.");
-                return null;
+                return (null, "Manifest read timed out.");
             }
-            return JsonSerializer.Deserialize<UpdateManifest>(json, JsonUtil.Options);
+            return (JsonSerializer.Deserialize<UpdateManifest>(json, JsonUtil.Options), null);
         }
 
         if (Uri.TryCreate(manifestUrl, UriKind.Absolute, out var uri) && uri.IsFile)
@@ -576,16 +628,23 @@ public sealed class AgentService : IDisposable
             if (json == null)
             {
                 _logger.Warn("Update init: manifest read timed out.");
-                return null;
+                return (null, "Manifest read timed out.");
             }
-            return JsonSerializer.Deserialize<UpdateManifest>(json, JsonUtil.Options);
+            return (JsonSerializer.Deserialize<UpdateManifest>(json, JsonUtil.Options), null);
         }
 
         _logger.Info($"Update init: reading manifest via http {manifestUrl}");
-        var response = await _httpClient.GetAsync(manifestUrl, _cts.Token).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
-        var content = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-        return JsonSerializer.Deserialize<UpdateManifest>(content, JsonUtil.Options);
+        try
+        {
+            var response = await _httpClient.GetAsync(manifestUrl, _cts.Token).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+            var content = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+            return (JsonSerializer.Deserialize<UpdateManifest>(content, JsonUtil.Options), null);
+        }
+        catch (Exception ex)
+        {
+            return (null, ex.Message);
+        }
     }
 
     private string ResolveManifestUrl(string? overrideUrl)
@@ -603,6 +662,24 @@ public sealed class AgentService : IDisposable
         }
 
         if (_updateConfigLoaded && !string.IsNullOrWhiteSpace(_updateConfig.ManifestUrl))
+        {
+            return _updateConfig.ManifestUrl;
+        }
+
+        return "";
+    }
+
+    private string GetFallbackManifestUrl(string primaryUrl)
+    {
+        if (!string.IsNullOrWhiteSpace(_updateState.FallbackManifestUrl) &&
+            !string.Equals(_updateState.FallbackManifestUrl, primaryUrl, StringComparison.OrdinalIgnoreCase))
+        {
+            return _updateState.FallbackManifestUrl;
+        }
+
+        if (_updateConfigLoaded &&
+            !string.IsNullOrWhiteSpace(_updateConfig.ManifestUrl) &&
+            !string.Equals(_updateConfig.ManifestUrl, primaryUrl, StringComparison.OrdinalIgnoreCase))
         {
             return _updateConfig.ManifestUrl;
         }
