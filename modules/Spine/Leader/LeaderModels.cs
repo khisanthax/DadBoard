@@ -40,3 +40,16 @@ public sealed class LeaderStateSnapshot
     public AgentInfo[] Agents { get; set; } = Array.Empty<AgentInfo>();
     public ConnectionInfo[] Connections { get; set; } = Array.Empty<ConnectionInfo>();
 }
+
+public sealed class UpdateMirrorSnapshot
+{
+    public bool Enabled { get; set; }
+    public string ManifestUrl { get; set; } = "";
+    public string LocalHostUrl { get; set; } = "";
+    public string LastManifestFetchUtc { get; set; } = "";
+    public string LastManifestResult { get; set; } = "";
+    public string LastDownloadUtc { get; set; } = "";
+    public string LastDownloadResult { get; set; } = "";
+    public string CachedVersions { get; set; } = "";
+    public string LastError { get; set; } = "";
+}

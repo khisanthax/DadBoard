@@ -30,7 +30,8 @@ public sealed class LeaderForm : Form
     private readonly FlowLayoutPanel _filterPanel = new();
     private readonly FlowLayoutPanel _targetPanel = new();
     private readonly Button _launchGameButton = new();
-    private readonly Button _selectAllAvailableButton = new();
+    private readonly Button _selectAllOnlineButton = new();
+    private readonly Button _clearTargetsButton = new();
 
     private readonly Button _launchOnSelectedAgentButton = new();
     private readonly Button _testButton = new();
@@ -49,12 +50,18 @@ public sealed class LeaderForm : Form
     private readonly Dictionary<string, string> _gamePcColumnMap = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, CheckBox> _filterCheckboxes = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, CheckBox> _targetCheckboxes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Label> _targetStatusLabels = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, FlowLayoutPanel> _targetRows = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, bool> _targetEligibility = new(StringComparer.OrdinalIgnoreCase);
     private readonly ToolTip _toolTip = new();
+    private readonly HashSet<string> _selectedTargets = new(StringComparer.OrdinalIgnoreCase);
     private int _refreshing;
     private bool _gamesDirty = true;
     private bool _allowClose;
     private HashSet<string>? _pendingLaunchTargets;
     private int? _pendingLaunchAppId;
+    private int? _lastSelectedGameAppId;
+    private bool _suppressTargetEvents;
 
     public LeaderForm(LeaderService service)
     {
@@ -206,8 +213,8 @@ public sealed class LeaderForm : Form
         };
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         var actions = new FlowLayoutPanel
         {
@@ -258,7 +265,8 @@ public sealed class LeaderForm : Form
         {
             Text = "Launch targets",
             Dock = DockStyle.Fill,
-            AutoSize = true
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink
         };
 
         var launchLayout = new TableLayoutPanel
@@ -286,15 +294,21 @@ public sealed class LeaderForm : Form
         _launchGameButton.Enabled = false;
         _launchGameButton.Click += async (_, _) => await LaunchSelectedGameOnTargets();
 
-        _selectAllAvailableButton.Text = "Select all available PCs";
-        _selectAllAvailableButton.Height = 32;
-        _selectAllAvailableButton.Enabled = false;
-        _selectAllAvailableButton.Click += (_, _) => SelectAllAvailableForSelectedGame();
+        _selectAllOnlineButton.Text = "Select all online";
+        _selectAllOnlineButton.Height = 32;
+        _selectAllOnlineButton.Enabled = false;
+        _selectAllOnlineButton.Click += (_, _) => SelectAllOnlineTargets();
+
+        _clearTargetsButton.Text = "Clear";
+        _clearTargetsButton.Height = 32;
+        _clearTargetsButton.Enabled = false;
+        _clearTargetsButton.Click += (_, _) => ClearTargetSelection();
 
         launchButtons.Controls.AddRange(new Control[]
         {
             _launchGameButton,
-            _selectAllAvailableButton
+            _selectAllOnlineButton,
+            _clearTargetsButton
         });
 
         launchLayout.Controls.Add(_targetPanel, 0, 0);
@@ -303,8 +317,8 @@ public sealed class LeaderForm : Form
 
         panel.Controls.Add(actions, 0, 0);
         panel.Controls.Add(filterGroup, 0, 1);
-        panel.Controls.Add(BuildGamesGrid(), 0, 2);
-        panel.Controls.Add(launchGroup, 0, 3);
+        panel.Controls.Add(launchGroup, 0, 2);
+        panel.Controls.Add(BuildGamesGrid(), 0, 3);
         return panel;
     }
     private Control BuildAgentsGrid()
@@ -362,6 +376,7 @@ public sealed class LeaderForm : Form
         _gamesGrid.MultiSelect = false;
         _gamesGrid.SelectionChanged += (_, _) =>
         {
+            LogGameSelectionIfChanged();
             UpdateTargetControlsForSelection();
             UpdateGameActions();
         };
@@ -649,6 +664,7 @@ public sealed class LeaderForm : Form
         }
 
         var checkedPcs = GetCheckedTargetPcIds();
+        _service.LogLaunchRequest(selection.Value.AppId, selection.Value.Name, checkedPcs);
         if (checkedPcs.Count == 0)
         {
             MessageBox.Show("Select at least one target PC for this game.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -656,7 +672,6 @@ public sealed class LeaderForm : Form
             return;
         }
 
-        _service.LogLaunchRequest(selection.Value.AppId, selection.Value.Name, checkedPcs);
         _launchGameButton.Enabled = false;
         _statusLabel.Text = $"Launching {selection.Value.Name} on {checkedPcs.Count} PC(s)...";
 
@@ -704,7 +719,7 @@ public sealed class LeaderForm : Form
         }
     }
 
-    private void SelectAllAvailableForSelectedGame()
+    private void SelectAllOnlineTargets()
     {
         var selection = GetSelectedGame();
         if (selection == null)
@@ -713,14 +728,32 @@ public sealed class LeaderForm : Form
             return;
         }
 
-        foreach (var checkbox in _targetCheckboxes.Values)
+        _suppressTargetEvents = true;
+        foreach (var entry in _targetCheckboxes)
         {
-            if (checkbox.Enabled)
+            if (entry.Value.Enabled)
             {
-                checkbox.Checked = true;
+                entry.Value.Checked = true;
+                _selectedTargets.Add(entry.Key);
             }
         }
 
+        _suppressTargetEvents = false;
+        LogTargetSelection();
+        UpdateGameActions();
+    }
+
+    private void ClearTargetSelection()
+    {
+        _suppressTargetEvents = true;
+        foreach (var checkbox in _targetCheckboxes.Values)
+        {
+            checkbox.Checked = false;
+        }
+
+        _selectedTargets.Clear();
+        _suppressTargetEvents = false;
+        LogTargetSelection();
         UpdateGameActions();
     }
 
@@ -749,6 +782,53 @@ public sealed class LeaderForm : Form
 
         _statusLabel.Text = $"Launching {selection.Value.Name} on {pcId}...";
     }
+
+    private void LogGameSelectionIfChanged()
+    {
+        var selection = GetSelectedGame();
+        var appId = selection?.AppId;
+        if (appId == _lastSelectedGameAppId)
+        {
+            return;
+        }
+
+        _lastSelectedGameAppId = appId;
+        if (selection != null)
+        {
+            _service.LogGameSelection(selection.Value.AppId, selection.Value.Name);
+            _statusLabel.Text = $"Selected game: {selection.Value.Name}";
+        }
+    }
+
+    private void LogTargetSelection()
+    {
+        _service.LogTargetSelection(_selectedTargets);
+        if (_selectedTargets.Count == 0)
+        {
+            _statusLabel.Text = "Targets cleared.";
+        }
+        else
+        {
+            _statusLabel.Text = $"Targets selected: {_selectedTargets.Count}";
+        }
+    }
+
+    private static string BuildTargetStatus(AgentInfo agent)
+    {
+        var status = agent.Online ? "Online" : "Offline";
+        if (!string.IsNullOrWhiteSpace(agent.LastStatus))
+        {
+            status += $" | {FormatCommandStatus(agent.LastStatus)}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(agent.LastError))
+        {
+            status += $" | Err: {Truncate(agent.LastError, 40)}";
+        }
+
+        return status;
+    }
+
     private void SendTestCommand()
     {
         var pcId = GetSelectedAgentPcId();
@@ -1041,76 +1121,139 @@ public sealed class LeaderForm : Form
         var selected = GetSelectedGame();
         var selectedAppId = selected?.AppId;
         var keep = new HashSet<string>(remoteAgents.Select(a => a.PcId), StringComparer.OrdinalIgnoreCase);
+        _suppressTargetEvents = true;
 
         foreach (var pcId in _targetCheckboxes.Keys.Where(pcId => !keep.Contains(pcId)).ToList())
         {
             var checkbox = _targetCheckboxes[pcId];
-            _targetPanel.Controls.Remove(checkbox);
+            if (_targetRows.TryGetValue(pcId, out var row))
+            {
+                _targetPanel.Controls.Remove(row);
+                row.Dispose();
+                _targetRows.Remove(pcId);
+            }
+            else
+            {
+                _targetPanel.Controls.Remove(checkbox);
+            }
             checkbox.Dispose();
             _targetCheckboxes.Remove(pcId);
+            _targetStatusLabels.Remove(pcId);
+            _targetEligibility.Remove(pcId);
+            _selectedTargets.Remove(pcId);
         }
 
         foreach (var agent in remoteAgents)
         {
             if (!_targetCheckboxes.TryGetValue(agent.PcId, out var checkbox))
             {
+                var pcId = agent.PcId;
                 checkbox = new CheckBox
                 {
                     AutoSize = true,
                     Text = agent.Name
                 };
-                checkbox.CheckedChanged += (_, _) => UpdateGameActions();
-                _targetPanel.Controls.Add(checkbox);
+                checkbox.CheckedChanged += (_, _) =>
+                {
+                    if (_suppressTargetEvents)
+                    {
+                        return;
+                    }
+
+                    if (checkbox.Checked)
+                    {
+                        _selectedTargets.Add(pcId);
+                    }
+                    else
+                    {
+                        _selectedTargets.Remove(pcId);
+                    }
+
+                    LogTargetSelection();
+                    UpdateGameActions();
+                };
+
+                var statusLabel = new Label
+                {
+                    AutoSize = true,
+                    ForeColor = SystemColors.GrayText
+                };
+
+                var row = new FlowLayoutPanel
+                {
+                    AutoSize = true,
+                    FlowDirection = FlowDirection.LeftToRight,
+                    WrapContents = false
+                };
+                row.Controls.Add(checkbox);
+                row.Controls.Add(statusLabel);
+                _targetPanel.Controls.Add(row);
                 _targetCheckboxes[agent.PcId] = checkbox;
+                _targetStatusLabels[pcId] = statusLabel;
+                _targetRows[pcId] = row;
             }
             else
             {
                 checkbox.Text = agent.Name;
             }
 
+            if (_targetStatusLabels.TryGetValue(agent.PcId, out var label))
+            {
+                label.Text = BuildTargetStatus(agent);
+                label.ForeColor = agent.Online ? SystemColors.WindowText : SystemColors.GrayText;
+                _toolTip.SetToolTip(label, agent.LastError ?? "");
+            }
+
             if (!selectedAppId.HasValue)
             {
-                checkbox.Checked = false;
+                checkbox.Checked = _selectedTargets.Contains(agent.PcId);
                 checkbox.Enabled = false;
                 _toolTip.SetToolTip(checkbox, "Select a game to enable targets.");
+                _targetEligibility[agent.PcId] = false;
                 continue;
             }
 
             if (inventoryErrors.TryGetValue(agent.PcId, out var error))
             {
-                checkbox.Checked = false;
+                checkbox.Checked = _selectedTargets.Contains(agent.PcId);
                 checkbox.Enabled = false;
                 _toolTip.SetToolTip(checkbox, error);
+                _targetEligibility[agent.PcId] = false;
                 continue;
             }
 
             var installed = inventorySets.TryGetValue(agent.PcId, out var set) && set.Contains(selectedAppId.Value);
             if (!installed)
             {
-                checkbox.Checked = false;
+                checkbox.Checked = _selectedTargets.Contains(agent.PcId);
                 checkbox.Enabled = false;
                 _toolTip.SetToolTip(checkbox, "Not installed on this PC.");
+                _targetEligibility[agent.PcId] = false;
                 continue;
             }
 
             if (!agent.Online)
             {
-                checkbox.Checked = false;
+                checkbox.Checked = _selectedTargets.Contains(agent.PcId);
                 checkbox.Enabled = false;
                 _toolTip.SetToolTip(checkbox, "PC is offline.");
+                _targetEligibility[agent.PcId] = false;
                 continue;
             }
 
             checkbox.Enabled = true;
+            checkbox.Checked = _selectedTargets.Contains(agent.PcId);
             _toolTip.SetToolTip(checkbox, "Installed.");
+            _targetEligibility[agent.PcId] = true;
         }
+
+        _suppressTargetEvents = false;
     }
 
     private List<string> GetCheckedTargetPcIds()
     {
-        return _targetCheckboxes
-            .Where(kv => kv.Value.Checked && kv.Value.Enabled)
-            .Select(kv => kv.Key)
+        return _selectedTargets
+            .Where(pcId => _targetEligibility.TryGetValue(pcId, out var eligible) && eligible)
             .ToList();
     }
 
@@ -1157,14 +1300,18 @@ public sealed class LeaderForm : Form
         if (selection == null)
         {
             _launchGameButton.Enabled = false;
-            _selectAllAvailableButton.Enabled = false;
+            _selectAllOnlineButton.Enabled = false;
+            _clearTargetsButton.Enabled = _selectedTargets.Count > 0;
+            _toolTip.SetToolTip(_launchGameButton, "Select a game and at least one target PC.");
             UpdateAgentActions();
             return;
         }
 
         var checkedTargets = GetCheckedTargetPcIds();
         _launchGameButton.Enabled = checkedTargets.Count > 0 && _pendingLaunchTargets == null;
-        _selectAllAvailableButton.Enabled = _targetCheckboxes.Values.Any(cb => cb.Enabled);
+        _selectAllOnlineButton.Enabled = _targetCheckboxes.Values.Any(cb => cb.Enabled);
+        _clearTargetsButton.Enabled = _selectedTargets.Count > 0;
+        _toolTip.SetToolTip(_launchGameButton, _launchGameButton.Enabled ? "" : "Select a game and at least one target PC.");
         UpdateAgentActions();
     }
 
@@ -1317,7 +1464,9 @@ public sealed class LeaderForm : Form
 
         return status.ToLowerInvariant() switch
         {
+            "starting" => "Starting",
             "downloading" => "Downloading",
+            "installing" => "Installing",
             "applying" => "Applying",
             "restarting" => "Restarting",
             "failed" => "Failed",

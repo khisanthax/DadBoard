@@ -41,6 +41,14 @@ public sealed class AgentService : IDisposable
     private Timer? _stateTimer;
     private DateTime _lastHello;
     private AgentState _state = new();
+    private Timer? _updateTimer;
+    private readonly object _updateLock = new();
+    private UpdateState _updateState = new();
+    private UpdateConfig _updateConfig = new();
+    private bool _updateConfigLoaded;
+    private string _updateConfigError = "";
+    private readonly TimeSpan _updateConfigTimeout = TimeSpan.FromSeconds(2);
+    private readonly TimeSpan _manifestTimeout = TimeSpan.FromSeconds(5);
 
     public event Action? ShutdownRequested;
 
@@ -58,6 +66,7 @@ public sealed class AgentService : IDisposable
 
         _logger = new AgentLogger(Path.Combine(_logDir, "agent.log"));
         _stateWriter = new AgentStateWriter(_statePath);
+        _httpClient.Timeout = _manifestTimeout;
     }
 
     public void Start()
@@ -71,6 +80,8 @@ public sealed class AgentService : IDisposable
                 PcId = _config.PcId,
                 DisplayName = _config.DisplayName
             };
+            _updateState = UpdateStateStore.Load();
+            _ = Task.Run(InitializeUpdateConfigAsync);
 
             _udp = new UdpClient(AddressFamily.InterNetwork)
             {
@@ -81,6 +92,7 @@ public sealed class AgentService : IDisposable
 
             _helloTimer = new Timer(_ => SendHello(), null, 0, _config.HelloIntervalMs);
             _stateTimer = new Timer(_ => PersistState(), null, 0, 1000);
+            StartUpdatePolling();
 
             _logger.Info("Agent started.");
         }
@@ -95,6 +107,14 @@ public sealed class AgentService : IDisposable
     {
         _logger.Info("Agent stopping.");
         Dispose();
+    }
+
+    private void StartUpdatePolling()
+    {
+        _updateTimer = new Timer(_ =>
+        {
+            _ = Task.Run(() => CheckForUpdatesAsync(force: false, manifestOverride: null));
+        }, null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(10));
     }
 
     private AgentConfig LoadConfig()
@@ -320,6 +340,44 @@ public sealed class AgentService : IDisposable
             return;
         }
 
+        if (envelope.Type == ProtocolConstants.TypeCommandTriggerUpdateNow)
+        {
+            var command = envelope.Payload.Deserialize<TriggerUpdateNowCommand>(JsonUtil.Options);
+            if (command == null)
+            {
+                SendAck(socket, envelope.CorrelationId, ok: false, "Invalid payload");
+                return;
+            }
+
+            _state.LastCommandId = envelope.CorrelationId;
+            _state.LastCommandType = envelope.Type;
+            _state.LastCommandTs = DateTime.UtcNow.ToString("O");
+
+            _ = Task.Run(async () =>
+            {
+                SendAck(socket, envelope.CorrelationId, ok: true, null);
+                await CheckForUpdatesAsync(force: true, manifestOverride: command.ManifestUrl).ConfigureAwait(false);
+            });
+            return;
+        }
+
+        if (envelope.Type == ProtocolConstants.TypeUpdateSource)
+        {
+            var payload = envelope.Payload.Deserialize<UpdateSourcePayload>(JsonUtil.Options);
+            if (payload == null)
+            {
+                SendAck(socket, envelope.CorrelationId, ok: false, "Invalid payload");
+                return;
+            }
+
+            _updateState.ManifestUrl = payload.PrimaryManifestUrl ?? "";
+            _updateState.FallbackManifestUrl = payload.FallbackManifestUrl ?? "";
+            UpdateStateStore.Save(_updateState);
+            _logger.Info($"Update source set. primary={_updateState.ManifestUrl} fallback={_updateState.FallbackManifestUrl}");
+            SendAck(socket, envelope.CorrelationId, ok: true, null);
+            return;
+        }
+
         SendAck(socket, envelope.CorrelationId, ok: false, "Unknown command");
     }
 
@@ -441,103 +499,341 @@ public sealed class AgentService : IDisposable
         }
     }
 
+    private async Task CheckForUpdatesAsync(bool force, string? manifestOverride)
+    {
+        if (_updateState.UpdatesDisabled && !force)
+        {
+            _logger.Warn("Updates disabled due to repeated failures.");
+            return;
+        }
+
+        lock (_updateLock)
+        {
+            if (_state.UpdateStatus is "downloading" or "installing" or "restarting")
+            {
+                return;
+            }
+        }
+
+        var primaryUrl = ResolveManifestUrl(manifestOverride);
+        var fallbackUrl = GetFallbackManifestUrl(primaryUrl);
+        if (string.IsNullOrWhiteSpace(primaryUrl) && string.IsNullOrWhiteSpace(fallbackUrl))
+        {
+            return;
+        }
+
+        try
+        {
+            _logger.Info($"Update init: resolving manifest primary={primaryUrl} fallback={fallbackUrl}");
+            var (manifest, error, usedUrl) = await TryLoadManifestWithFallback(primaryUrl, fallbackUrl).ConfigureAwait(false);
+            if (manifest == null)
+            {
+                RegisterUpdateFailure(error ?? "Manifest unavailable.");
+                return;
+            }
+
+            var latest = VersionUtil.Normalize(manifest.LatestVersion);
+            var current = VersionUtil.GetCurrentVersion();
+            var tokenChanged = manifest.ForceCheckToken != _updateState.ForceCheckToken;
+            var versionNewer = VersionUtil.Compare(latest, current) > 0;
+
+            if (!string.IsNullOrWhiteSpace(primaryUrl))
+            {
+                _updateState.ManifestUrl = primaryUrl;
+            }
+            _updateState.ForceCheckToken = manifest.ForceCheckToken;
+            _updateState.LastCheckedUtc = DateTime.UtcNow.ToString("O");
+            _updateState.LatestVersion = latest;
+            _updateState.LastError = "";
+            _updateState.ConsecutiveFailures = 0;
+            _updateState.UpdatesDisabled = false;
+            UpdateStateStore.Save(_updateState);
+
+            if (!force && !tokenChanged && !versionNewer)
+            {
+                _updateState.LastResult = "up-to-date";
+                UpdateStateStore.Save(_updateState);
+                return;
+            }
+
+            SendUpdateStatus("starting", "Starting update.");
+            _logger.Info($"Update check starting. current={current} latest={latest} tokenChanged={tokenChanged}");
+
+            var updateUrl = usedUrl ?? primaryUrl;
+            var ok = await RunSetupUpdateAsync(updateUrl).ConfigureAwait(false);
+            if (!ok && !string.IsNullOrWhiteSpace(fallbackUrl) &&
+                !string.Equals(updateUrl, fallbackUrl, StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.Warn($"Update failed via primary manifest; retrying fallback {fallbackUrl}");
+                SendUpdateStatus("downloading", "Primary update failed; retrying fallback.");
+                ok = await RunSetupUpdateAsync(fallbackUrl).ConfigureAwait(false);
+                if (ok)
+                {
+                    _updateState.ManifestUrl = fallbackUrl;
+                    UpdateStateStore.Save(_updateState);
+                }
+            }
+
+            if (!ok)
+            {
+                RegisterUpdateFailure("Updater failed.");
+                return;
+            }
+
+            _updateState.LastResult = "restarting";
+            UpdateStateStore.Save(_updateState);
+        }
+        catch (Exception ex)
+        {
+            RegisterUpdateFailure(ex.ToString());
+            SendUpdateStatus("failed", ex.Message);
+            _logger.Error($"Update check failed: {ex}");
+        }
+    }
+
+    private async Task<(UpdateManifest? Manifest, string? Error, string? UsedUrl)> TryLoadManifestWithFallback(string primaryUrl, string fallbackUrl)
+    {
+        if (!string.IsNullOrWhiteSpace(primaryUrl))
+        {
+            var (manifest, error) = await TryLoadManifestAsync(primaryUrl).ConfigureAwait(false);
+            if (manifest != null)
+            {
+                return (manifest, null, primaryUrl);
+            }
+
+            _logger.Warn($"Update init: primary manifest failed: {error}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(fallbackUrl) &&
+            !string.Equals(primaryUrl, fallbackUrl, StringComparison.OrdinalIgnoreCase))
+        {
+            var (manifest, error) = await TryLoadManifestAsync(fallbackUrl).ConfigureAwait(false);
+            if (manifest != null)
+            {
+                _logger.Info("Update init: fallback manifest succeeded.");
+                _updateState.ManifestUrl = fallbackUrl;
+                return (manifest, null, fallbackUrl);
+            }
+
+            return (null, error, null);
+        }
+
+        return (null, "Manifest unavailable.", null);
+    }
+
+    private async Task<(UpdateManifest? Manifest, string? Error)> TryLoadManifestAsync(string manifestUrl)
+    {
+        if (File.Exists(manifestUrl))
+        {
+            _logger.Info($"Update init: reading manifest from file {manifestUrl}");
+            var json = await ReadFileWithTimeoutAsync(manifestUrl, _manifestTimeout).ConfigureAwait(false);
+            if (json == null)
+            {
+                _logger.Warn("Update init: manifest read timed out.");
+                return (null, "Manifest read timed out.");
+            }
+            return (JsonSerializer.Deserialize<UpdateManifest>(json, JsonUtil.Options), null);
+        }
+
+        if (Uri.TryCreate(manifestUrl, UriKind.Absolute, out var uri) && uri.IsFile)
+        {
+            _logger.Info($"Update init: reading manifest from file {uri.LocalPath}");
+            var json = await ReadFileWithTimeoutAsync(uri.LocalPath, _manifestTimeout).ConfigureAwait(false);
+            if (json == null)
+            {
+                _logger.Warn("Update init: manifest read timed out.");
+                return (null, "Manifest read timed out.");
+            }
+            return (JsonSerializer.Deserialize<UpdateManifest>(json, JsonUtil.Options), null);
+        }
+
+        _logger.Info($"Update init: reading manifest via http {manifestUrl}");
+        try
+        {
+            var response = await _httpClient.GetAsync(manifestUrl, _cts.Token).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+            var content = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+            return (JsonSerializer.Deserialize<UpdateManifest>(content, JsonUtil.Options), null);
+        }
+        catch (Exception ex)
+        {
+            return (null, ex.Message);
+        }
+    }
+
+    private string ResolveManifestUrl(string? overrideUrl)
+    {
+        if (!string.IsNullOrWhiteSpace(overrideUrl))
+        {
+            _updateState.ManifestUrl = overrideUrl;
+            UpdateStateStore.Save(_updateState);
+            return overrideUrl;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_updateState.ManifestUrl))
+        {
+            return _updateState.ManifestUrl;
+        }
+
+        if (_updateConfigLoaded && !string.IsNullOrWhiteSpace(_updateConfig.ManifestUrl))
+        {
+            return _updateConfig.ManifestUrl;
+        }
+
+        return "";
+    }
+
+    private string GetFallbackManifestUrl(string primaryUrl)
+    {
+        if (!string.IsNullOrWhiteSpace(_updateState.FallbackManifestUrl) &&
+            !string.Equals(_updateState.FallbackManifestUrl, primaryUrl, StringComparison.OrdinalIgnoreCase))
+        {
+            return _updateState.FallbackManifestUrl;
+        }
+
+        if (_updateConfigLoaded &&
+            !string.IsNullOrWhiteSpace(_updateConfig.ManifestUrl) &&
+            !string.Equals(_updateConfig.ManifestUrl, primaryUrl, StringComparison.OrdinalIgnoreCase))
+        {
+            return _updateConfig.ManifestUrl;
+        }
+
+        return "";
+    }
+
+    private async Task<bool> RunSetupUpdateAsync(string manifestUrl)
+    {
+        var setupExe = DadBoardPaths.SetupExePath;
+        if (!File.Exists(setupExe))
+        {
+            SendUpdateStatus("failed", $"Updater not found: {setupExe}");
+            _logger.Warn($"Update skipped: {setupExe} missing.");
+            return false;
+        }
+
+        SendUpdateStatus("downloading", "Starting updater.");
+        _logger.Info($"Launching updater: {setupExe} /update --silent --manifest \"{manifestUrl}\"");
+
+        var startInfo = new ProcessStartInfo(setupExe, $"/update --silent --manifest \"{manifestUrl}\"")
+        {
+            UseShellExecute = true,
+            WorkingDirectory = Path.GetDirectoryName(setupExe) ?? Environment.CurrentDirectory
+        };
+
+        var process = Process.Start(startInfo);
+        if (process == null)
+        {
+            SendUpdateStatus("failed", "Failed to launch updater.");
+            _logger.Warn("Updater process failed to start.");
+            return false;
+        }
+
+        SendUpdateStatus("installing", "Updater running.");
+        await process.WaitForExitAsync(_cts.Token).ConfigureAwait(false);
+
+        if (process.ExitCode != 0)
+        {
+            SendUpdateStatus("failed", $"Updater exited with code {process.ExitCode}.");
+            _logger.Warn($"Updater exited with {process.ExitCode}.");
+            return false;
+        }
+
+        SendUpdateStatus("restarting", "Restarting DadBoard.");
+        _logger.Info("Updater finished; requesting shutdown.");
+        ShutdownRequested?.Invoke();
+        return true;
+    }
+
+    private async Task InitializeUpdateConfigAsync()
+    {
+        var path = UpdateConfigStore.GetConfigPath();
+        try
+        {
+            _logger.Info($"Update init: reading config path={path}");
+            if (!File.Exists(path))
+            {
+                _logger.Info("Update init: update.config.json not found.");
+                _updateConfigLoaded = true;
+                return;
+            }
+
+            var info = new FileInfo(path);
+            _logger.Info($"Update init: config size={info.Length} bytes");
+            var json = await ReadFileWithTimeoutAsync(path, _updateConfigTimeout).ConfigureAwait(false);
+            if (json == null)
+            {
+                _updateConfigError = "update.config.json read timed out.";
+                _logger.Warn($"Update init: {_updateConfigError}");
+                RegisterUpdateFailure(_updateConfigError);
+                _updateConfigLoaded = true;
+                return;
+            }
+
+            try
+            {
+                var config = JsonSerializer.Deserialize<UpdateConfig>(json, JsonUtil.Options);
+                _updateConfig = config ?? new UpdateConfig();
+                if (!string.IsNullOrWhiteSpace(_updateConfig.ManifestUrl))
+                {
+                    _updateState.ManifestUrl = _updateConfig.ManifestUrl;
+                    UpdateStateStore.Save(_updateState);
+                    _logger.Info($"Update init: manifest source set to {_updateConfig.ManifestUrl}");
+                }
+                _updateConfigLoaded = true;
+                _logger.Info("Update init: config parsed successfully.");
+            }
+            catch (Exception ex)
+            {
+                _updateConfigError = $"update.config.json parse failed: {ex.Message}";
+                _logger.Warn($"Update init: {_updateConfigError}");
+                RegisterUpdateFailure(_updateConfigError);
+                _updateConfigLoaded = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            _updateConfigError = $"update.config.json read failed: {ex.Message}";
+            _logger.Warn($"Update init: {_updateConfigError}");
+            RegisterUpdateFailure(_updateConfigError);
+            _updateConfigLoaded = true;
+        }
+    }
+
+    private async Task<string?> ReadFileWithTimeoutAsync(string path, TimeSpan timeout)
+    {
+        var readTask = Task.Run(() => File.ReadAllText(path));
+        var completed = await Task.WhenAny(readTask, Task.Delay(timeout, _cts.Token)).ConfigureAwait(false);
+        if (completed != readTask)
+        {
+            return null;
+        }
+
+        return await readTask.ConfigureAwait(false);
+    }
+
+    private void RegisterUpdateFailure(string error)
+    {
+        _updateState.LastResult = "failed";
+        _updateState.LastError = error;
+        _updateState.ConsecutiveFailures++;
+        if (_updateState.ConsecutiveFailures >= 3)
+        {
+            _updateState.UpdatesDisabled = true;
+            _logger.Warn("Updates disabled after repeated failures.");
+        }
+
+        UpdateStateStore.Save(_updateState);
+    }
+
     private async Task ExecuteUpdateSelf(string correlationId, UpdateSelfCommand command, WebSocket socket)
     {
         SendAck(socket, correlationId, ok: true, null);
 
-        if (string.IsNullOrWhiteSpace(command.UpdateBaseUrl))
-        {
-            SendUpdateStatus("failed", "Missing update base URL.");
-            _logger.Warn($"UpdateSelf failed corr={correlationId}: missing update base URL.");
-            return;
-        }
+        var manifestUrl = string.IsNullOrWhiteSpace(command.UpdateBaseUrl)
+            ? ""
+            : $"{command.UpdateBaseUrl.TrimEnd('/')}/updates/latest.json";
 
-        var baseUrl = command.UpdateBaseUrl.TrimEnd('/');
-        var versionUrl = $"{baseUrl}/updates/version.json";
-        var exeUrl = $"{baseUrl}/updates/DadBoard.exe";
-
-        try
-        {
-            SendUpdateStatus("downloading", "Downloading update.");
-            _logger.Info($"UpdateSelf downloading from {baseUrl} corr={correlationId}.");
-
-            Directory.CreateDirectory(DadBoardPaths.UpdatesDir);
-
-            var versionJson = await _httpClient.GetStringAsync(versionUrl).ConfigureAwait(false);
-            var versionInfo = JsonSerializer.Deserialize<UpdateVersionInfo>(versionJson, JsonUtil.Options);
-            if (versionInfo == null || string.IsNullOrWhiteSpace(versionInfo.Sha256))
-            {
-                SendUpdateStatus("failed", "Invalid update metadata.");
-                _logger.Warn($"UpdateSelf invalid metadata corr={correlationId}.");
-                return;
-            }
-
-            await DownloadFileAsync(exeUrl, DadBoardPaths.UpdateNewExePath).ConfigureAwait(false);
-            var actualSha = HashUtil.ComputeSha256(DadBoardPaths.UpdateNewExePath);
-            if (!string.Equals(actualSha, versionInfo.Sha256, StringComparison.OrdinalIgnoreCase))
-            {
-                SendUpdateStatus("failed", "SHA256 mismatch.");
-                _logger.Warn($"UpdateSelf sha mismatch corr={correlationId} expected={versionInfo.Sha256} actual={actualSha}");
-                return;
-            }
-
-            SendUpdateStatus("applying", "Applying update.");
-            if (!LaunchBootstrapperForUpdate(DadBoardPaths.UpdateNewExePath))
-            {
-                SendUpdateStatus("failed", "Failed to launch bootstrapper.");
-                return;
-            }
-
-            SendUpdateStatus("restarting", "Restarting for update.");
-            _logger.Info("UpdateSelf restarting via bootstrapper.");
-            ShutdownRequested?.Invoke();
-        }
-        catch (Exception ex)
-        {
-            SendUpdateStatus("failed", ex.Message);
-            _logger.Error($"UpdateSelf failed corr={correlationId}: {ex}");
-        }
-    }
-
-    private async Task DownloadFileAsync(string url, string path)
-    {
-        using var response = await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
-        await using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
-        await using var file = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
-        await stream.CopyToAsync(file).ConfigureAwait(false);
-    }
-
-    private bool LaunchBootstrapperForUpdate(string newExePath)
-    {
-        var bootstrapper = DadBoardPaths.InstalledExePath;
-        if (!File.Exists(bootstrapper))
-        {
-            _logger.Error($"UpdateSelf bootstrapper not found at {bootstrapper}.");
-            return false;
-        }
-
-        var args = $"--apply-update \"{newExePath}\" --wait-pid {Process.GetCurrentProcess().Id} --mode agent --minimized";
-        try
-        {
-            var startInfo = new ProcessStartInfo(bootstrapper, args)
-            {
-                UseShellExecute = true
-            };
-            var process = Process.Start(startInfo);
-            if (process == null)
-            {
-                _logger.Error("UpdateSelf failed to start bootstrapper process.");
-                return false;
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.Error($"UpdateSelf failed to launch bootstrapper: {ex.Message}");
-            return false;
-        }
-
-        return true;
+        await CheckForUpdatesAsync(force: true, manifestOverride: manifestUrl).ConfigureAwait(false);
     }
 
     private void SendUpdateStatus(string status, string? message)
@@ -695,7 +991,7 @@ public sealed class AgentService : IDisposable
             Name = _config.DisplayName,
             Ip = GetLocalIp(),
             WsPort = _config.WsPort,
-            Version = GetAppVersion(),
+            Version = VersionUtil.Normalize(GetAppVersion()),
             Ts = DateTime.UtcNow.ToString("O")
         };
 
@@ -738,6 +1034,7 @@ public sealed class AgentService : IDisposable
         _cts.Cancel();
         _helloTimer?.Dispose();
         _stateTimer?.Dispose();
+        _updateTimer?.Dispose();
         _httpClient.Dispose();
         if (_webApp != null)
         {
@@ -759,15 +1056,15 @@ public sealed class AgentService : IDisposable
             var path = Process.GetCurrentProcess().MainModule?.FileName;
             if (string.IsNullOrWhiteSpace(path))
             {
-                return "0.0.0.0";
+                return "0.0.0";
             }
 
             var info = FileVersionInfo.GetVersionInfo(path);
-            return info.FileVersion ?? "0.0.0.0";
+            return VersionUtil.Normalize(info.FileVersion ?? "0.0.0");
         }
         catch
         {
-            return "0.0.0.0";
+            return "0.0.0";
         }
     }
 }

@@ -32,7 +32,7 @@ static class Program
                 string.Equals(arg, "--install-elevated", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(arg, "--install", StringComparison.OrdinalIgnoreCase));
 
-            if (!isInstallFlow && RuntimeBootstrapper.IsRunningFromInstalledLocation())
+            if (!isInstallFlow && RuntimeBootstrapper.IsLegacyBootstrapperPath())
             {
                 if (!RuntimeBootstrapper.TryLaunchRuntime(args, updateLogger, out var error))
                 {

@@ -23,12 +23,32 @@ static class RuntimeBootstrapper
             StringComparison.OrdinalIgnoreCase);
     }
 
+    public static bool IsLegacyBootstrapperPath()
+    {
+        var path = Process.GetCurrentProcess().MainModule?.FileName;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        var legacyPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            "DadBoard",
+            "DadBoard.exe");
+
+        return string.Equals(
+            Path.GetFullPath(path),
+            Path.GetFullPath(legacyPath),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
     public static bool TryLaunchRuntime(string[] args, UpdateLogger logger, out string? error)
     {
         error = null;
         try
         {
-            EnsureRuntimeExists(logger);
+            var sourcePath = Process.GetCurrentProcess().MainModule?.FileName;
+            EnsureRuntimeExists(logger, sourcePath);
             var runtimeExe = DadBoardPaths.RuntimeExePath;
             if (!File.Exists(runtimeExe))
             {
@@ -121,13 +141,21 @@ static class RuntimeBootstrapper
         }
     }
 
-    private static void EnsureRuntimeExists(UpdateLogger logger)
+    private static void EnsureRuntimeExists(UpdateLogger logger, string? sourcePath)
     {
         Directory.CreateDirectory(DadBoardPaths.RuntimeDir);
         if (!File.Exists(DadBoardPaths.RuntimeExePath) && File.Exists(DadBoardPaths.InstalledExePath))
         {
             File.Copy(DadBoardPaths.InstalledExePath, DadBoardPaths.RuntimeExePath, true);
             logger.Info($"Copied runtime from {DadBoardPaths.InstalledExePath}.");
+        }
+
+        if (!File.Exists(DadBoardPaths.RuntimeExePath) &&
+            !string.IsNullOrWhiteSpace(sourcePath) &&
+            File.Exists(sourcePath))
+        {
+            File.Copy(sourcePath, DadBoardPaths.RuntimeExePath, true);
+            logger.Info($"Copied runtime from {sourcePath}.");
         }
     }
 
