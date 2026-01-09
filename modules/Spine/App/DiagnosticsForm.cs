@@ -18,6 +18,7 @@ public sealed class DiagnosticsForm : Form
     private readonly TextBox _version = new();
     private readonly TextBox _updateSource = new();
     private readonly TextBox _logsPath = new();
+    private readonly TextBox _updateError = new();
     private readonly ListView _agentVersions = new();
     private readonly Label _devWarning = new();
     private readonly Button _launchInstalledButton = new();
@@ -33,9 +34,10 @@ public sealed class DiagnosticsForm : Form
 
         _layout.Dock = DockStyle.Fill;
         _layout.ColumnCount = 2;
-        _layout.RowCount = 8;
+        _layout.RowCount = 9;
         _layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
         _layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -60,7 +62,8 @@ public sealed class DiagnosticsForm : Form
         AddRow("Expected install", _expectedPath, 2);
         AddRow("App version", _version, 3);
         AddRow("Update source", _updateSource, 4);
-        AddRow("Logs folder", _logsPath, 5);
+        AddRow("Update source error", _updateError, 5);
+        AddRow("Logs folder", _logsPath, 6);
 
         var agentLabel = new Label
         {
@@ -68,7 +71,7 @@ public sealed class DiagnosticsForm : Form
             TextAlign = ContentAlignment.MiddleLeft,
             Dock = DockStyle.Fill
         };
-        _layout.Controls.Add(agentLabel, 0, 6);
+        _layout.Controls.Add(agentLabel, 0, 7);
 
         _agentVersions.View = View.Details;
         _agentVersions.FullRowSelect = true;
@@ -76,7 +79,7 @@ public sealed class DiagnosticsForm : Form
         _agentVersions.Columns.Add("PC", 200);
         _agentVersions.Columns.Add("Version", 120);
         _agentVersions.Dock = DockStyle.Fill;
-        _layout.Controls.Add(_agentVersions, 1, 6);
+        _layout.Controls.Add(_agentVersions, 1, 7);
 
         var buttonPanel = new FlowLayoutPanel
         {
@@ -103,7 +106,7 @@ public sealed class DiagnosticsForm : Form
         buttonPanel.Controls.Add(_launchInstalledButton);
 
         _layout.Controls.Add(_devWarning, 0, 0);
-        _layout.Controls.Add(buttonPanel, 0, 7);
+        _layout.Controls.Add(buttonPanel, 0, 8);
         _layout.SetColumnSpan(buttonPanel, 2);
 
         Controls.Add(_layout);
@@ -118,14 +121,13 @@ public sealed class DiagnosticsForm : Form
         _runningPath.Text = runningPath;
         _expectedPath.Text = DadBoardPaths.InstalledExePath;
         _version.Text = VersionUtil.GetCurrentVersion();
-        var updateConfig = UpdateConfigStore.Load();
-        _updateSource.Text = string.IsNullOrWhiteSpace(updateConfig.ManifestUrl)
-            ? "Not configured"
-            : updateConfig.ManifestUrl;
+        _updateSource.Text = "Loading...";
+        _updateError.Text = "";
         _logsPath.Text = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DadBoard", "logs");
 
         UpdateDevWarning(runningPath);
         UpdateAgentVersions();
+        LoadUpdateDetailsAsync();
     }
 
     private void UpdateDevWarning(string runningPath)
@@ -171,6 +173,79 @@ public sealed class DiagnosticsForm : Form
         }
     }
 
+    private void LoadUpdateDetailsAsync()
+    {
+        _ = System.Threading.Tasks.Task.Run(() =>
+        {
+            UpdateConfig? config = null;
+            UpdateState? state = null;
+            string? error = null;
+
+            try
+            {
+                config = UpdateConfigStore.Load();
+            }
+            catch (Exception ex)
+            {
+                error = $"Config load failed: {ex.Message}";
+            }
+
+            try
+            {
+                state = UpdateStateStore.Load();
+            }
+            catch (Exception ex)
+            {
+                error = error ?? $"State load failed: {ex.Message}";
+            }
+
+            return (config, state, error);
+        }).ContinueWith(task =>
+        {
+            if (IsDisposed || Disposing)
+            {
+                return;
+            }
+
+            if (task.IsFaulted)
+            {
+                _updateSource.Text = "Not configured";
+                _updateError.Text = task.Exception?.GetBaseException().Message ?? "Update info failed.";
+                return;
+            }
+
+            var (config, state, error) = task.Result;
+            var source = config?.ManifestUrl ?? "";
+            _updateSource.Text = string.IsNullOrWhiteSpace(source) ? "Not configured" : source;
+
+            if (!string.IsNullOrWhiteSpace(error))
+            {
+                _updateError.Text = error;
+                return;
+            }
+
+            if (state != null)
+            {
+                if (state.UpdatesDisabled)
+                {
+                    _updateError.Text = "Updates disabled due to repeated failures.";
+                }
+                else if (!string.IsNullOrWhiteSpace(state.LastError))
+                {
+                    _updateError.Text = state.LastError;
+                }
+                else
+                {
+                    _updateError.Text = "None";
+                }
+            }
+            else
+            {
+                _updateError.Text = "None";
+            }
+        }, System.Threading.Tasks.TaskScheduler.FromCurrentSynchronizationContext());
+    }
+
     private void OpenLogsFolder()
     {
         var path = _logsPath.Text;
@@ -190,6 +265,7 @@ public sealed class DiagnosticsForm : Form
         sb.AppendLine($"Expected install: {_expectedPath.Text}");
         sb.AppendLine($"Version: {_version.Text}");
         sb.AppendLine($"Update source: {_updateSource.Text}");
+        sb.AppendLine($"Update source error: {_updateError.Text}");
         sb.AppendLine($"Logs folder: {_logsPath.Text}");
 
         if (_leader != null)

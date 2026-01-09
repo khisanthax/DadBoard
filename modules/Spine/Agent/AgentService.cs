@@ -44,6 +44,11 @@ public sealed class AgentService : IDisposable
     private Timer? _updateTimer;
     private readonly object _updateLock = new();
     private UpdateState _updateState = new();
+    private UpdateConfig _updateConfig = new();
+    private bool _updateConfigLoaded;
+    private string _updateConfigError = "";
+    private readonly TimeSpan _updateConfigTimeout = TimeSpan.FromSeconds(2);
+    private readonly TimeSpan _manifestTimeout = TimeSpan.FromSeconds(5);
 
     public event Action? ShutdownRequested;
 
@@ -61,6 +66,7 @@ public sealed class AgentService : IDisposable
 
         _logger = new AgentLogger(Path.Combine(_logDir, "agent.log"));
         _stateWriter = new AgentStateWriter(_statePath);
+        _httpClient.Timeout = _manifestTimeout;
     }
 
     public void Start()
@@ -75,6 +81,7 @@ public sealed class AgentService : IDisposable
                 DisplayName = _config.DisplayName
             };
             _updateState = UpdateStateStore.Load();
+            _ = Task.Run(InitializeUpdateConfigAsync);
 
             _udp = new UdpClient(AddressFamily.InterNetwork)
             {
@@ -477,6 +484,12 @@ public sealed class AgentService : IDisposable
 
     private async Task CheckForUpdatesAsync(bool force, string? manifestOverride)
     {
+        if (_updateState.UpdatesDisabled && !force)
+        {
+            _logger.Warn("Updates disabled due to repeated failures.");
+            return;
+        }
+
         lock (_updateLock)
         {
             if (_state.UpdateStatus is "downloading" or "installing" or "restarting")
@@ -496,9 +509,7 @@ public sealed class AgentService : IDisposable
             var manifest = await LoadManifestAsync(manifestUrl).ConfigureAwait(false);
             if (manifest == null)
             {
-                _updateState.LastResult = "failed";
-                _updateState.LastError = "Manifest unavailable.";
-                UpdateStateStore.Save(_updateState);
+                RegisterUpdateFailure("Manifest unavailable.");
                 return;
             }
 
@@ -511,6 +522,9 @@ public sealed class AgentService : IDisposable
             _updateState.ForceCheckToken = manifest.ForceCheckToken;
             _updateState.LastCheckedUtc = DateTime.UtcNow.ToString("O");
             _updateState.LatestVersion = latest;
+            _updateState.LastError = "";
+            _updateState.ConsecutiveFailures = 0;
+            _updateState.UpdatesDisabled = false;
             UpdateStateStore.Save(_updateState);
 
             if (!force && !tokenChanged && !versionNewer)
@@ -526,8 +540,7 @@ public sealed class AgentService : IDisposable
             var ok = await RunSetupUpdateAsync(manifestUrl).ConfigureAwait(false);
             if (!ok)
             {
-                _updateState.LastResult = "failed";
-                UpdateStateStore.Save(_updateState);
+                RegisterUpdateFailure("Updater failed.");
                 return;
             }
 
@@ -536,9 +549,7 @@ public sealed class AgentService : IDisposable
         }
         catch (Exception ex)
         {
-            _updateState.LastResult = "failed";
-            _updateState.LastError = ex.Message;
-            UpdateStateStore.Save(_updateState);
+            RegisterUpdateFailure(ex.ToString());
             SendUpdateStatus("failed", ex.Message);
             _logger.Error($"Update check failed: {ex}");
         }
@@ -548,16 +559,29 @@ public sealed class AgentService : IDisposable
     {
         if (File.Exists(manifestUrl))
         {
-            var json = await File.ReadAllTextAsync(manifestUrl).ConfigureAwait(false);
+            _logger.Info($"Update init: reading manifest from file {manifestUrl}");
+            var json = await ReadFileWithTimeoutAsync(manifestUrl, _manifestTimeout).ConfigureAwait(false);
+            if (json == null)
+            {
+                _logger.Warn("Update init: manifest read timed out.");
+                return null;
+            }
             return JsonSerializer.Deserialize<UpdateManifest>(json, JsonUtil.Options);
         }
 
         if (Uri.TryCreate(manifestUrl, UriKind.Absolute, out var uri) && uri.IsFile)
         {
-            var json = await File.ReadAllTextAsync(uri.LocalPath).ConfigureAwait(false);
+            _logger.Info($"Update init: reading manifest from file {uri.LocalPath}");
+            var json = await ReadFileWithTimeoutAsync(uri.LocalPath, _manifestTimeout).ConfigureAwait(false);
+            if (json == null)
+            {
+                _logger.Warn("Update init: manifest read timed out.");
+                return null;
+            }
             return JsonSerializer.Deserialize<UpdateManifest>(json, JsonUtil.Options);
         }
 
+        _logger.Info($"Update init: reading manifest via http {manifestUrl}");
         var response = await _httpClient.GetAsync(manifestUrl, _cts.Token).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         var content = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
@@ -578,8 +602,12 @@ public sealed class AgentService : IDisposable
             return _updateState.ManifestUrl;
         }
 
-        var config = UpdateConfigStore.Load();
-        return config.ManifestUrl ?? "";
+        if (_updateConfigLoaded && !string.IsNullOrWhiteSpace(_updateConfig.ManifestUrl))
+        {
+            return _updateConfig.ManifestUrl;
+        }
+
+        return "";
     }
 
     private async Task<bool> RunSetupUpdateAsync(string manifestUrl)
@@ -623,6 +651,87 @@ public sealed class AgentService : IDisposable
         _logger.Info("Updater finished; requesting shutdown.");
         ShutdownRequested?.Invoke();
         return true;
+    }
+
+    private async Task InitializeUpdateConfigAsync()
+    {
+        var path = UpdateConfigStore.GetConfigPath();
+        try
+        {
+            _logger.Info($"Update init: reading config path={path}");
+            if (!File.Exists(path))
+            {
+                _logger.Info("Update init: update.config.json not found.");
+                _updateConfigLoaded = true;
+                return;
+            }
+
+            var info = new FileInfo(path);
+            _logger.Info($"Update init: config size={info.Length} bytes");
+            var json = await ReadFileWithTimeoutAsync(path, _updateConfigTimeout).ConfigureAwait(false);
+            if (json == null)
+            {
+                _updateConfigError = "update.config.json read timed out.";
+                _logger.Warn($"Update init: {_updateConfigError}");
+                RegisterUpdateFailure(_updateConfigError);
+                _updateConfigLoaded = true;
+                return;
+            }
+
+            try
+            {
+                var config = JsonSerializer.Deserialize<UpdateConfig>(json, JsonUtil.Options);
+                _updateConfig = config ?? new UpdateConfig();
+                if (!string.IsNullOrWhiteSpace(_updateConfig.ManifestUrl))
+                {
+                    _updateState.ManifestUrl = _updateConfig.ManifestUrl;
+                    UpdateStateStore.Save(_updateState);
+                    _logger.Info($"Update init: manifest source set to {_updateConfig.ManifestUrl}");
+                }
+                _updateConfigLoaded = true;
+                _logger.Info("Update init: config parsed successfully.");
+            }
+            catch (Exception ex)
+            {
+                _updateConfigError = $"update.config.json parse failed: {ex.Message}";
+                _logger.Warn($"Update init: {_updateConfigError}");
+                RegisterUpdateFailure(_updateConfigError);
+                _updateConfigLoaded = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            _updateConfigError = $"update.config.json read failed: {ex.Message}";
+            _logger.Warn($"Update init: {_updateConfigError}");
+            RegisterUpdateFailure(_updateConfigError);
+            _updateConfigLoaded = true;
+        }
+    }
+
+    private async Task<string?> ReadFileWithTimeoutAsync(string path, TimeSpan timeout)
+    {
+        var readTask = Task.Run(() => File.ReadAllText(path));
+        var completed = await Task.WhenAny(readTask, Task.Delay(timeout, _cts.Token)).ConfigureAwait(false);
+        if (completed != readTask)
+        {
+            return null;
+        }
+
+        return await readTask.ConfigureAwait(false);
+    }
+
+    private void RegisterUpdateFailure(string error)
+    {
+        _updateState.LastResult = "failed";
+        _updateState.LastError = error;
+        _updateState.ConsecutiveFailures++;
+        if (_updateState.ConsecutiveFailures >= 3)
+        {
+            _updateState.UpdatesDisabled = true;
+            _logger.Warn("Updates disabled after repeated failures.");
+        }
+
+        UpdateStateStore.Save(_updateState);
     }
 
     private async Task ExecuteUpdateSelf(string correlationId, UpdateSelfCommand command, WebSocket socket)
