@@ -1174,6 +1174,17 @@ public sealed class LeaderService : IDisposable
         _logger.Info($"Launch requested gameId={gameId} name={gameName} appId={appId} targets=[{targets}]");
     }
 
+    public void LogGameSelection(int appId, string gameName)
+    {
+        _logger.Info($"Game selected appId={appId} name={gameName}");
+    }
+
+    public void LogTargetSelection(IEnumerable<string> pcIds)
+    {
+        var targets = string.Join(",", pcIds);
+        _logger.Info($"Targets selected=[{targets}]");
+    }
+
     private async Task SendLaunchExe(AgentInfo agent, string exePath)
     {
         var connection = await EnsureConnection(agent).ConfigureAwait(false);
