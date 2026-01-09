@@ -19,6 +19,11 @@ public sealed class DiagnosticsForm : Form
     private readonly TextBox _updateSource = new();
     private readonly TextBox _logsPath = new();
     private readonly TextBox _updateError = new();
+    private readonly TextBox _mirrorStatus = new();
+    private readonly TextBox _mirrorHostUrl = new();
+    private readonly TextBox _mirrorLastManifest = new();
+    private readonly TextBox _mirrorLastDownload = new();
+    private readonly TextBox _mirrorCached = new();
     private readonly ListView _agentVersions = new();
     private readonly Label _devWarning = new();
     private readonly Button _launchInstalledButton = new();
@@ -34,9 +39,13 @@ public sealed class DiagnosticsForm : Form
 
         _layout.Dock = DockStyle.Fill;
         _layout.ColumnCount = 2;
-        _layout.RowCount = 9;
+        _layout.RowCount = 14;
         _layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
         _layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -63,7 +72,12 @@ public sealed class DiagnosticsForm : Form
         AddRow("App version", _version, 3);
         AddRow("Update source", _updateSource, 4);
         AddRow("Update source error", _updateError, 5);
-        AddRow("Logs folder", _logsPath, 6);
+        AddRow("Mirror status", _mirrorStatus, 6);
+        AddRow("Mirror host URL", _mirrorHostUrl, 7);
+        AddRow("Last manifest fetch", _mirrorLastManifest, 8);
+        AddRow("Last zip download", _mirrorLastDownload, 9);
+        AddRow("Cached versions", _mirrorCached, 10);
+        AddRow("Logs folder", _logsPath, 11);
 
         var agentLabel = new Label
         {
@@ -71,7 +85,7 @@ public sealed class DiagnosticsForm : Form
             TextAlign = ContentAlignment.MiddleLeft,
             Dock = DockStyle.Fill
         };
-        _layout.Controls.Add(agentLabel, 0, 7);
+        _layout.Controls.Add(agentLabel, 0, 12);
 
         _agentVersions.View = View.Details;
         _agentVersions.FullRowSelect = true;
@@ -79,7 +93,7 @@ public sealed class DiagnosticsForm : Form
         _agentVersions.Columns.Add("PC", 200);
         _agentVersions.Columns.Add("Version", 120);
         _agentVersions.Dock = DockStyle.Fill;
-        _layout.Controls.Add(_agentVersions, 1, 7);
+        _layout.Controls.Add(_agentVersions, 1, 12);
 
         var buttonPanel = new FlowLayoutPanel
         {
@@ -106,7 +120,7 @@ public sealed class DiagnosticsForm : Form
         buttonPanel.Controls.Add(_launchInstalledButton);
 
         _layout.Controls.Add(_devWarning, 0, 0);
-        _layout.Controls.Add(buttonPanel, 0, 8);
+        _layout.Controls.Add(buttonPanel, 0, 13);
         _layout.SetColumnSpan(buttonPanel, 2);
 
         Controls.Add(_layout);
@@ -128,6 +142,7 @@ public sealed class DiagnosticsForm : Form
         UpdateDevWarning(runningPath);
         UpdateAgentVersions();
         LoadUpdateDetailsAsync();
+        UpdateMirrorDetails();
     }
 
     private void UpdateDevWarning(string runningPath)
@@ -170,6 +185,35 @@ public sealed class DiagnosticsForm : Form
                 agent.Name,
                 string.IsNullOrWhiteSpace(agent.Version) ? "-" : VersionUtil.Normalize(agent.Version)
             }));
+        }
+    }
+
+    private void UpdateMirrorDetails()
+    {
+        if (_leader == null)
+        {
+            _mirrorStatus.Text = "Leader disabled";
+            _mirrorHostUrl.Text = "";
+            _mirrorLastManifest.Text = "";
+            _mirrorLastDownload.Text = "";
+            _mirrorCached.Text = "";
+            return;
+        }
+
+        var snapshot = _leader.GetUpdateMirrorSnapshot();
+        _mirrorStatus.Text = snapshot.Enabled ? "Enabled" : "Disabled";
+        _mirrorHostUrl.Text = snapshot.LocalHostUrl;
+        _mirrorLastManifest.Text = string.IsNullOrWhiteSpace(snapshot.LastManifestFetchUtc)
+            ? snapshot.LastManifestResult
+            : $"{snapshot.LastManifestFetchUtc} ({snapshot.LastManifestResult})";
+        _mirrorLastDownload.Text = string.IsNullOrWhiteSpace(snapshot.LastDownloadUtc)
+            ? snapshot.LastDownloadResult
+            : $"{snapshot.LastDownloadUtc} ({snapshot.LastDownloadResult})";
+        _mirrorCached.Text = snapshot.CachedVersions;
+
+        if (string.IsNullOrWhiteSpace(_updateError.Text) && !string.IsNullOrWhiteSpace(snapshot.LastError))
+        {
+            _updateError.Text = snapshot.LastError;
         }
     }
 
@@ -266,6 +310,11 @@ public sealed class DiagnosticsForm : Form
         sb.AppendLine($"Version: {_version.Text}");
         sb.AppendLine($"Update source: {_updateSource.Text}");
         sb.AppendLine($"Update source error: {_updateError.Text}");
+        sb.AppendLine($"Mirror status: {_mirrorStatus.Text}");
+        sb.AppendLine($"Mirror host URL: {_mirrorHostUrl.Text}");
+        sb.AppendLine($"Last manifest fetch: {_mirrorLastManifest.Text}");
+        sb.AppendLine($"Last zip download: {_mirrorLastDownload.Text}");
+        sb.AppendLine($"Cached versions: {_mirrorCached.Text}");
         sb.AppendLine($"Logs folder: {_logsPath.Text}");
 
         if (_leader != null)

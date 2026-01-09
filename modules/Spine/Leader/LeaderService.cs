@@ -60,6 +60,21 @@ public sealed class LeaderService : IDisposable
     private readonly ConcurrentDictionary<string, DateTime> _lastReconnectAttempt = new(StringComparer.OrdinalIgnoreCase);
     private WebApplication? _updateHost;
     private Task? _updateHostTask;
+    private readonly HttpClient _updateHttp = new();
+    private UpdateConfig _updateConfig = new();
+    private Timer? _mirrorTimer;
+    private readonly object _mirrorLock = new();
+    private bool _mirrorDisabled;
+    private int _mirrorFailures;
+    private string _mirrorManifestUrl = "";
+    private string _mirrorLocalHostUrl = "";
+    private string _mirrorLastManifestResult = "";
+    private string _mirrorLastDownloadResult = "";
+    private DateTime _mirrorLastManifestFetchUtc;
+    private DateTime _mirrorLastDownloadUtc;
+    private string _mirrorLastError = "";
+    private string _cachedVersions = "";
+    private bool _updateConfigLoaded;
 
     public event Action? InventoriesUpdated;
 
@@ -84,6 +99,7 @@ public sealed class LeaderService : IDisposable
         _stateWriter = new LeaderStateWriter(_statePath);
         _localAgentPcId = TryLoadLocalAgentPcId();
         _localIps = GetLocalIps();
+        _updateHttp.Timeout = TimeSpan.FromSeconds(5);
 
         _config = LoadConfig();
         LoadInventoryCaches();
@@ -96,6 +112,7 @@ public sealed class LeaderService : IDisposable
         _reconnectTimer = new Timer(_ => TryReconnectOnlineAgents(), null, 0, 2000);
 
         _ = Task.Run(RefreshSteamInventory);
+        _ = Task.Run(InitializeUpdateMirrorAsync);
     }
 
     public LeaderConfig Config => _config;
@@ -111,6 +128,22 @@ public sealed class LeaderService : IDisposable
     }
 
     public DateTime GetLastInventoryRefreshUtc() => _lastInventoryRefresh;
+
+    public UpdateMirrorSnapshot GetUpdateMirrorSnapshot()
+    {
+        return new UpdateMirrorSnapshot
+        {
+            Enabled = _updateConfig.MirrorEnabled && string.Equals(_updateConfig.Source, "github_mirror", StringComparison.OrdinalIgnoreCase),
+            ManifestUrl = _updateConfig.ManifestUrl,
+            LocalHostUrl = _mirrorLocalHostUrl,
+            LastManifestFetchUtc = _mirrorLastManifestFetchUtc == default ? "" : _mirrorLastManifestFetchUtc.ToString("O"),
+            LastManifestResult = _mirrorLastManifestResult,
+            LastDownloadUtc = _mirrorLastDownloadUtc == default ? "" : _mirrorLastDownloadUtc.ToString("O"),
+            LastDownloadResult = _mirrorLastDownloadResult,
+            CachedVersions = _cachedVersions,
+            LastError = _mirrorLastError
+        };
+    }
 
     public IReadOnlyDictionary<string, GameInventory> GetAgentInventoriesSnapshot()
     {
@@ -401,7 +434,8 @@ public sealed class LeaderService : IDisposable
         {
             Directory.CreateDirectory(DadBoardPaths.UpdateSourceDir);
             var builder = WebApplication.CreateBuilder();
-            builder.WebHost.UseUrls($"http://0.0.0.0:{_config.UpdatePort}");
+            var port = GetUpdateHostPort();
+            builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
             var app = builder.Build();
 
             app.MapGet("/updates/latest.json", (HttpContext context) =>
@@ -421,6 +455,12 @@ public sealed class LeaderService : IDisposable
                 var path = Path.Combine(DadBoardPaths.UpdateSourceDir, file);
                 if (!File.Exists(path))
                 {
+                    var cached = Path.Combine(DadBoardPaths.UpdateSourceDir, "cache", file);
+                    if (File.Exists(cached))
+                    {
+                        return Results.File(cached, "application/octet-stream", file);
+                    }
+
                     _logger.Warn($"Update host missing file: {path}");
                     return Results.Problem("Update file not found.", statusCode: StatusCodes.Status404NotFound);
                 }
@@ -430,12 +470,191 @@ public sealed class LeaderService : IDisposable
 
             _updateHost = app;
             _updateHostTask = app.RunAsync(_cts.Token);
-            _logger.Info($"Update host listening on port {_config.UpdatePort}.");
+            _logger.Info($"Update host listening on port {port}.");
         }
         catch (Exception ex)
         {
             _logger.Error($"Update host failed to start: {ex.Message}");
         }
+    }
+
+    private int GetUpdateHostPort()
+    {
+        if (_updateConfig.LocalHostPort > 0)
+        {
+            return _updateConfig.LocalHostPort;
+        }
+
+        return _config.UpdatePort;
+    }
+
+    private async Task InitializeUpdateMirrorAsync()
+    {
+        try
+        {
+            _logger.Info("Update mirror: loading update config.");
+            _updateConfig = await Task.Run(UpdateConfigStore.Load).ConfigureAwait(false);
+            _updateConfigLoaded = true;
+            _logger.Info($"Update mirror: source={_updateConfig.Source} manifest={_updateConfig.ManifestUrl}");
+
+            if (IsMirrorEnabled())
+            {
+                StartMirrorTimer();
+            }
+        }
+        catch (Exception ex)
+        {
+            _mirrorLastError = ex.Message;
+            _logger.Warn($"Update mirror: config load failed: {ex.Message}");
+        }
+    }
+
+    private bool IsMirrorEnabled()
+    {
+        return _updateConfig.MirrorEnabled &&
+               string.Equals(_updateConfig.Source, "github_mirror", StringComparison.OrdinalIgnoreCase) &&
+               !string.IsNullOrWhiteSpace(_updateConfig.ManifestUrl);
+    }
+
+    private void StartMirrorTimer()
+    {
+        var minutes = _updateConfig.MirrorPollMinutes > 0 ? _updateConfig.MirrorPollMinutes : 10;
+        _mirrorTimer?.Dispose();
+        _mirrorTimer = new Timer(_ => _ = Task.Run(MirrorPollAsync), null, TimeSpan.Zero, TimeSpan.FromMinutes(minutes));
+        _logger.Info($"Update mirror: polling every {minutes} minutes.");
+    }
+
+    private async Task MirrorPollAsync()
+    {
+        if (_mirrorDisabled || !IsMirrorEnabled())
+        {
+            return;
+        }
+
+        lock (_mirrorLock)
+        {
+            _mirrorManifestUrl = _updateConfig.ManifestUrl;
+        }
+
+        try
+        {
+            _mirrorLastManifestFetchUtc = DateTime.UtcNow;
+            _mirrorLastManifestResult = "fetching";
+            var manifest = await FetchManifestAsync(_mirrorManifestUrl).ConfigureAwait(false);
+            if (manifest == null || string.IsNullOrWhiteSpace(manifest.PackageUrl))
+            {
+                RegisterMirrorFailure("Manifest unavailable.");
+                return;
+            }
+
+            var version = VersionUtil.Normalize(manifest.LatestVersion);
+            if (string.IsNullOrWhiteSpace(version))
+            {
+                RegisterMirrorFailure("Manifest missing version.");
+                return;
+            }
+
+            var cacheDir = Path.Combine(DadBoardPaths.UpdateSourceDir, "cache");
+            Directory.CreateDirectory(cacheDir);
+            var cachedZip = Path.Combine(cacheDir, $"DadBoard-{version}.zip");
+            var needsDownload = !File.Exists(cachedZip);
+
+            if (needsDownload)
+            {
+                _mirrorLastDownloadUtc = DateTime.UtcNow;
+                _mirrorLastDownloadResult = "downloading";
+                await DownloadFileAsync(manifest.PackageUrl, cachedZip).ConfigureAwait(false);
+                _mirrorLastDownloadResult = "downloaded";
+                _mirrorLastDownloadUtc = DateTime.UtcNow;
+            }
+
+            var localHostUrl = GetLocalHostUrl();
+            var localManifest = new UpdateManifest
+            {
+                LatestVersion = version,
+                PackageUrl = $"{localHostUrl}/updates/DadBoard-{version}.zip",
+                ForceCheckToken = manifest.ForceCheckToken,
+                MinSupportedVersion = manifest.MinSupportedVersion
+            };
+
+            var manifestPath = Path.Combine(DadBoardPaths.UpdateSourceDir, "latest.json");
+            var json = JsonSerializer.Serialize(localManifest, JsonUtil.Options);
+            File.WriteAllText(manifestPath, json);
+
+            _mirrorLocalHostUrl = $"{localHostUrl}/updates/latest.json";
+            _mirrorLastManifestResult = "ok";
+            _mirrorLastError = "";
+            _mirrorFailures = 0;
+            _mirrorDisabled = false;
+            _cachedVersions = string.Join(", ", Directory.GetFiles(cacheDir, "DadBoard-*.zip")
+                .Select(Path.GetFileNameWithoutExtension)
+                .Select(name => name?.Replace("DadBoard-", "", StringComparison.OrdinalIgnoreCase))
+                .Where(name => !string.IsNullOrWhiteSpace(name)));
+
+            _logger.Info($"Update mirror: cached {version} and wrote local manifest.");
+        }
+        catch (Exception ex)
+        {
+            RegisterMirrorFailure(ex.Message);
+        }
+    }
+
+    private async Task<UpdateManifest?> FetchManifestAsync(string manifestUrl)
+    {
+        try
+        {
+            _logger.Info($"Update mirror: fetching manifest {manifestUrl}");
+            var response = await _updateHttp.GetAsync(manifestUrl, _cts.Token).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+            var json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+            return JsonSerializer.Deserialize<UpdateManifest>(json, JsonUtil.Options);
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn($"Update mirror: manifest fetch failed: {ex.Message}");
+            _mirrorLastManifestResult = $"error: {ex.Message}";
+            return null;
+        }
+    }
+
+    private async Task DownloadFileAsync(string url, string destination)
+    {
+        _logger.Info($"Update mirror: downloading {url}");
+        using var response = await _updateHttp.GetAsync(url, _cts.Token).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        await using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+        await using var file = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None);
+        await stream.CopyToAsync(file, _cts.Token).ConfigureAwait(false);
+    }
+
+    private void RegisterMirrorFailure(string error)
+    {
+        _mirrorLastError = error;
+        _mirrorLastManifestResult = $"error: {error}";
+        _mirrorFailures++;
+        if (_mirrorFailures >= 3)
+        {
+            _mirrorDisabled = true;
+            _logger.Warn("Update mirror disabled after repeated failures.");
+        }
+
+        _logger.Warn($"Update mirror: {error}");
+    }
+
+    private string GetLocalHostUrl()
+    {
+        if (!string.IsNullOrWhiteSpace(_updateConfig.LocalHostIp))
+        {
+            return $"http://{_updateConfig.LocalHostIp}:{GetUpdateHostPort()}";
+        }
+
+        var ip = _localIps.FirstOrDefault(addr => !string.Equals(addr, "127.0.0.1", StringComparison.OrdinalIgnoreCase));
+        if (string.IsNullOrWhiteSpace(ip))
+        {
+            ip = "127.0.0.1";
+        }
+
+        return $"http://{ip}:{GetUpdateHostPort()}";
     }
 
     private UpdateManifest? BuildUpdateManifest(HttpContext context)
@@ -492,6 +711,11 @@ public sealed class LeaderService : IDisposable
         }
 
         var packages = Directory.GetFiles(DadBoardPaths.UpdateSourceDir, "DadBoard-*.zip");
+        var cacheDir = Path.Combine(DadBoardPaths.UpdateSourceDir, "cache");
+        if (Directory.Exists(cacheDir))
+        {
+            packages = packages.Concat(Directory.GetFiles(cacheDir, "DadBoard-*.zip")).ToArray();
+        }
         if (packages.Length == 0)
         {
             return false;
@@ -875,8 +1099,13 @@ public sealed class LeaderService : IDisposable
 
     private string GetUpdateBaseUrl(AgentInfo agent)
     {
-        var port = _config.UpdatePort;
+        var port = GetUpdateHostPort();
         var agentIp = agent.Ip ?? "";
+        if (!string.IsNullOrWhiteSpace(_updateConfig.LocalHostIp))
+        {
+            return $"http://{_updateConfig.LocalHostIp}:{port}";
+        }
+
         var match = _localIps.FirstOrDefault(ip => IsSameSubnet(ip, agentIp));
         if (string.IsNullOrWhiteSpace(match))
         {
@@ -1033,15 +1262,15 @@ public sealed class LeaderService : IDisposable
         }
 
         var correlationId = Guid.NewGuid().ToString("N");
-        var manifestUrl = $"{GetUpdateBaseUrl(agent)}/updates/latest.json";
-        var payload = new TriggerUpdateNowCommand
+        var baseUrl = GetUpdateBaseUrl(agent);
+        var payload = new UpdateSelfCommand
         {
-            ManifestUrl = manifestUrl
+            UpdateBaseUrl = baseUrl
         };
 
         var envelope = new
         {
-            type = ProtocolConstants.TypeCommandTriggerUpdateNow,
+            type = ProtocolConstants.TypeCommandUpdateSelf,
             correlationId,
             pcId = agent.PcId,
             payload,
@@ -1052,8 +1281,8 @@ public sealed class LeaderService : IDisposable
         var buffer = Encoding.UTF8.GetBytes(json);
 
         agent.UpdateStatus = "sent";
-        agent.UpdateMessage = $"Update requested via {manifestUrl}";
-        _logger.Info($"Sending TriggerUpdateNow to pcId={agent.PcId} ip={agent.Ip} ws={agent.WsPort} manifest={manifestUrl} corr={correlationId}");
+        agent.UpdateMessage = $"Update requested via {baseUrl}";
+        _logger.Info($"Sending UpdateSelf to pcId={agent.PcId} ip={agent.Ip} ws={agent.WsPort} base={baseUrl} corr={correlationId}");
 
         try
         {
@@ -1063,7 +1292,7 @@ public sealed class LeaderService : IDisposable
         {
             agent.UpdateStatus = "failed";
             agent.UpdateMessage = ex.Message;
-            _logger.Warn($"TriggerUpdateNow send failed for {agent.Name}: {ex.Message}");
+            _logger.Warn($"UpdateSelf send failed for {agent.Name}: {ex.Message}");
         }
     }
 
