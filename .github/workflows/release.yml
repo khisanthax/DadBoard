@@ -39,6 +39,7 @@ jobs:
 
           New-Item -ItemType Directory -Force $payloadDir | Out-Null
           Copy-Item "$publishApp/DadBoard.exe" $payloadDir -Force
+          Copy-Item "$publishApp/DadBoard.exe" "DadBoard.exe" -Force
           Copy-Item "$publishSetup/DadBoardSetup.exe" "DadBoardSetup.exe" -Force
 
           $zipName = "DadBoard-$version.zip"
@@ -60,5 +61,6 @@ jobs:
         with:
           files: |
             DadBoard-*.zip
+            DadBoard.exe
             DadBoardSetup.exe
             latest.json
