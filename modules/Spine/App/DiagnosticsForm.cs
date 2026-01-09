@@ -381,7 +381,7 @@ public sealed class DiagnosticsForm : Form
         Application.Exit();
     }
 
-    private void AddRow(string labelText, TextBox target, int row)
+    private void AddRow(string labelText, Control target, int row)
     {
         var label = new Label
         {
@@ -390,9 +390,16 @@ public sealed class DiagnosticsForm : Form
             Dock = DockStyle.Fill
         };
 
-        target.ReadOnly = true;
-        target.BorderStyle = BorderStyle.FixedSingle;
-        target.Dock = DockStyle.Fill;
+        if (target is TextBox textBox)
+        {
+            textBox.ReadOnly = true;
+            textBox.BorderStyle = BorderStyle.FixedSingle;
+            textBox.Dock = DockStyle.Fill;
+        }
+        else
+        {
+            target.Dock = DockStyle.Fill;
+        }
 
         _layout.Controls.Add(label, 0, row);
         _layout.Controls.Add(target, 1, row);
