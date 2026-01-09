@@ -24,6 +24,7 @@ public sealed class SetupForm : Form
     private readonly TextBox _manifestUrlInput = new();
     private readonly TextBox _localHostIpInput = new();
     private readonly Button _saveUpdateConfigButton = new();
+    private readonly Button _resetUpdateConfigButton = new();
     private readonly Label _updateStatusLabel = new();
     private SetupLogger? _logger;
     private readonly CancellationTokenSource _cts = new();
@@ -282,7 +283,7 @@ public sealed class SetupForm : Form
     {
         var group = new GroupBox
         {
-            Text = "Update source",
+            Text = "Advanced / Override update source",
             Dock = DockStyle.Fill,
             AutoSize = true
         };
@@ -313,6 +314,9 @@ public sealed class SetupForm : Form
         _saveUpdateConfigButton.Text = "Save";
         _saveUpdateConfigButton.AutoSize = true;
         _saveUpdateConfigButton.Click += (_, _) => SaveUpdateConfig();
+        _resetUpdateConfigButton.Text = "Reset to default";
+        _resetUpdateConfigButton.AutoSize = true;
+        _resetUpdateConfigButton.Click += (_, _) => ResetUpdateConfig();
 
         _updateStatusLabel.AutoSize = true;
         _updateStatusLabel.Text = "Not configured";
@@ -322,6 +326,7 @@ public sealed class SetupForm : Form
         panel.Controls.Add(hostLabel);
         panel.Controls.Add(_localHostIpInput);
         panel.Controls.Add(_saveUpdateConfigButton);
+        panel.Controls.Add(_resetUpdateConfigButton);
         panel.Controls.Add(_updateStatusLabel);
         group.Controls.Add(panel);
         return group;
@@ -330,7 +335,7 @@ public sealed class SetupForm : Form
     private void LoadUpdateConfigUi()
     {
         var config = UpdateConfigStore.Load();
-        _manifestUrlInput.Text = config.ManifestUrl;
+        _manifestUrlInput.Text = UpdateConfigStore.ResolveManifestUrl(config);
         _localHostIpInput.Text = config.LocalHostIp;
         _updateStatusLabel.Text = GetUpdateSourceStatus(config);
     }
@@ -349,9 +354,24 @@ public sealed class SetupForm : Form
         AppendLog($"Update source saved: {config.ManifestUrl}");
     }
 
+    private void ResetUpdateConfig()
+    {
+        var config = UpdateConfigStore.Load();
+        config.ManifestUrl = UpdateConfigStore.DefaultManifestUrl;
+        config.LocalHostIp = "";
+        config.Source = "github_mirror";
+        config.MirrorEnabled = true;
+        UpdateConfigStore.Save(config);
+        _manifestUrlInput.Text = config.ManifestUrl;
+        _localHostIpInput.Text = config.LocalHostIp;
+        _updateStatusLabel.Text = GetUpdateSourceStatus(config);
+        AppendLog("Update source reset to default.");
+    }
+
     private static string GetUpdateSourceStatus(UpdateConfig config)
     {
-        if (string.IsNullOrWhiteSpace(config.ManifestUrl))
+        var resolved = UpdateConfigStore.ResolveManifestUrl(config);
+        if (string.IsNullOrWhiteSpace(resolved))
         {
             return "Not configured";
         }
@@ -395,7 +415,7 @@ public sealed class SetupForm : Form
     private bool IsUpdateSourceConfigured()
     {
         var config = UpdateConfigStore.Load();
-        if (!string.IsNullOrWhiteSpace(config.ManifestUrl))
+        if (!string.IsNullOrWhiteSpace(UpdateConfigStore.ResolveManifestUrl(config)))
         {
             return true;
         }

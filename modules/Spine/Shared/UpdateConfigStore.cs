@@ -6,6 +6,29 @@ namespace DadBoard.Spine.Shared;
 
 public static class UpdateConfigStore
 {
+    public static string DefaultManifestUrl =>
+        "https://github.com/khisanthax/DadBoard/releases/latest/download/latest.json";
+
+    public static string ResolveManifestUrl(UpdateConfig config)
+    {
+        if (!string.IsNullOrWhiteSpace(config.ManifestUrl))
+        {
+            return config.ManifestUrl;
+        }
+
+        return DefaultManifestUrl;
+    }
+
+    public static bool IsDefaultManifestUrl(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return true;
+        }
+
+        return string.Equals(url.Trim(), DefaultManifestUrl, StringComparison.OrdinalIgnoreCase);
+    }
+
     public static string GetConfigPath()
     {
         var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DadBoard");
@@ -42,6 +65,11 @@ public static class UpdateConfigStore
 
     private static UpdateConfig Normalize(UpdateConfig config)
     {
+        if (string.IsNullOrWhiteSpace(config.ManifestUrl))
+        {
+            config.ManifestUrl = DefaultManifestUrl;
+        }
+
         if (config.MirrorPollMinutes <= 0)
         {
             config.MirrorPollMinutes = 10;
@@ -54,14 +82,12 @@ public static class UpdateConfigStore
 
         if (string.IsNullOrWhiteSpace(config.Source))
         {
-            if (config.MirrorEnabled)
-            {
-                config.Source = "github_mirror";
-            }
-            else if (!string.IsNullOrWhiteSpace(config.ManifestUrl))
-            {
-                config.Source = "github_direct";
-            }
+            config.Source = "github_mirror";
+        }
+
+        if (string.IsNullOrWhiteSpace(config.ManifestUrl) == false)
+        {
+            config.MirrorEnabled = true;
         }
 
         return config;

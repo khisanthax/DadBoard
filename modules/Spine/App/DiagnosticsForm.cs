@@ -90,7 +90,7 @@ public sealed class DiagnosticsForm : Form
         AddRow("App version", _version, 3);
         AddRow("Update source", _updateSource, 4);
         AddRow("Update source error", _updateError, 5);
-        AddRow("Set manifest URL", BuildManifestEditor(), 6);
+        AddRow("Advanced / Override manifest URL", BuildManifestEditor(), 6);
         AddRow("Mirror status", _mirrorStatus, 7);
         AddRow("Mirror host URL", _mirrorHostUrl, 8);
         AddRow("Last manifest fetch", _mirrorLastManifest, 9);
@@ -193,12 +193,19 @@ public sealed class DiagnosticsForm : Form
         _saveManifestButton.Text = "Save";
         _saveManifestButton.AutoSize = true;
         _saveManifestButton.Click += (_, _) => SaveManifestUrl();
+        var resetButton = new Button
+        {
+            Text = "Reset to default",
+            AutoSize = true
+        };
+        resetButton.Click += (_, _) => ResetManifestUrl();
 
         panel.Controls.Add(manifestLabel);
         panel.Controls.Add(_manifestUrlInput);
         panel.Controls.Add(hostLabel);
         panel.Controls.Add(_localHostIpInput);
         panel.Controls.Add(_saveManifestButton);
+        panel.Controls.Add(resetButton);
         return panel;
     }
 
@@ -355,10 +362,19 @@ public sealed class DiagnosticsForm : Form
             }
 
             var (config, state, error) = task.Result;
+            var resolved = config == null ? "" : UpdateConfigStore.ResolveManifestUrl(config);
             var source = config?.ManifestUrl ?? "";
-            _manifestUrlInput.Text = source;
+            _manifestUrlInput.Text = string.IsNullOrWhiteSpace(source) ? resolved : source;
             _localHostIpInput.Text = config?.LocalHostIp ?? "";
-            _updateSource.Text = string.IsNullOrWhiteSpace(source) ? "Not configured" : source;
+            if (string.IsNullOrWhiteSpace(resolved))
+            {
+                _updateSource.Text = "Not configured";
+            }
+            else
+            {
+                var label = UpdateConfigStore.IsDefaultManifestUrl(source) ? "Default" : "Override";
+                _updateSource.Text = $"{label}: {resolved}";
+            }
 
             if (!string.IsNullOrWhiteSpace(error))
             {
@@ -441,7 +457,25 @@ public sealed class DiagnosticsForm : Form
         config.MirrorEnabled = !string.IsNullOrWhiteSpace(url);
         UpdateConfigStore.Save(config);
         _leader?.ReloadUpdateConfig();
-        _updateSource.Text = string.IsNullOrWhiteSpace(url) ? "Not configured" : url;
+        var resolved = UpdateConfigStore.ResolveManifestUrl(config);
+        var label = UpdateConfigStore.IsDefaultManifestUrl(url) ? "Default" : "Override";
+        _updateSource.Text = string.IsNullOrWhiteSpace(resolved) ? "Not configured" : $"{label}: {resolved}";
+        _updateError.Text = "None";
+        UpdateMirrorDetails();
+    }
+
+    private void ResetManifestUrl()
+    {
+        var config = UpdateConfigStore.Load();
+        config.ManifestUrl = UpdateConfigStore.DefaultManifestUrl;
+        config.Source = "github_mirror";
+        config.MirrorEnabled = true;
+        config.LocalHostIp = "";
+        UpdateConfigStore.Save(config);
+        _manifestUrlInput.Text = config.ManifestUrl;
+        _localHostIpInput.Text = config.LocalHostIp;
+        _leader?.ReloadUpdateConfig();
+        _updateSource.Text = $"Default: {config.ManifestUrl}";
         _updateError.Text = "None";
         UpdateMirrorDetails();
     }
@@ -470,18 +504,20 @@ public sealed class DiagnosticsForm : Form
             AppendSelfTest("Step A: Loading update.config.json...");
             var config = await Task.Run(UpdateConfigStore.Load).ConfigureAwait(true);
             var (hostUrl, reason) = _leader.GetLocalUpdateHostUrlWithReason();
-            AppendSelfTest($"Config source={config.Source} manifest_url={config.ManifestUrl}");
+            var resolved = UpdateConfigStore.ResolveManifestUrl(config);
+            var sourceLabel = UpdateConfigStore.IsDefaultManifestUrl(config.ManifestUrl) ? "default" : "override";
+            AppendSelfTest($"Config source={config.Source} manifest_url={resolved} ({sourceLabel})");
             AppendSelfTest($"mirror_enabled={config.MirrorEnabled} poll_minutes={config.MirrorPollMinutes} local_host={hostUrl} ({reason})");
 
             AppendSelfTest("Step B: Fetching GitHub manifest...");
-            if (string.IsNullOrWhiteSpace(config.ManifestUrl))
+            if (string.IsNullOrWhiteSpace(resolved))
             {
                 passed = false;
                 AppendSelfTest("FAIL: manifest_url not configured.");
             }
             else
             {
-                var manifest = await FetchManifestAsync(config.ManifestUrl).ConfigureAwait(true);
+                var manifest = await FetchManifestAsync(resolved).ConfigureAwait(true);
                 if (manifest == null)
                 {
                     passed = false;

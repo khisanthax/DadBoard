@@ -128,9 +128,11 @@ public static class SetupOperations
         }
 
         var config = UpdateConfigStore.Load();
-        if (!string.IsNullOrWhiteSpace(config.ManifestUrl))
+        var resolved = UpdateConfigStore.ResolveManifestUrl(config);
+        if (!string.IsNullOrWhiteSpace(resolved))
         {
-            return config.ManifestUrl;
+            logger.Info($"Resolved manifest URL: {resolved}");
+            return resolved;
         }
 
         var localManifest = Path.Combine(AppContext.BaseDirectory, "latest.json");

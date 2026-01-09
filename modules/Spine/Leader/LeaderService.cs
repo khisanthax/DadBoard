@@ -161,7 +161,9 @@ public sealed class LeaderService : IDisposable
             _updateConfigLoaded = true;
             _mirrorDisabled = false;
             _mirrorFailures = 0;
-            _logger.Info($"Update mirror: config reloaded source={_updateConfig.Source} manifest={_updateConfig.ManifestUrl}");
+            var resolved = UpdateConfigStore.ResolveManifestUrl(_updateConfig);
+            var sourceLabel = UpdateConfigStore.IsDefaultManifestUrl(_updateConfig.ManifestUrl) ? "default" : "override";
+            _logger.Info($"Update mirror: config reloaded source={_updateConfig.Source} manifest={resolved} ({sourceLabel})");
 
             if (IsMirrorEnabled())
             {
@@ -529,7 +531,9 @@ public sealed class LeaderService : IDisposable
             _logger.Info("Update mirror: loading update config.");
             _updateConfig = await Task.Run(UpdateConfigStore.Load).ConfigureAwait(false);
             _updateConfigLoaded = true;
-            _logger.Info($"Update mirror: source={_updateConfig.Source} manifest={_updateConfig.ManifestUrl}");
+            var resolved = UpdateConfigStore.ResolveManifestUrl(_updateConfig);
+            var sourceLabel = UpdateConfigStore.IsDefaultManifestUrl(_updateConfig.ManifestUrl) ? "default" : "override";
+            _logger.Info($"Update mirror: source={_updateConfig.Source} manifest={resolved} ({sourceLabel})");
 
             if (IsMirrorEnabled())
             {

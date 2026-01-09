@@ -775,9 +775,11 @@ public sealed class AgentService : IDisposable
                 _updateConfig = config ?? new UpdateConfig();
                 if (!string.IsNullOrWhiteSpace(_updateConfig.ManifestUrl))
                 {
-                    _updateState.ManifestUrl = _updateConfig.ManifestUrl;
+                    var resolved = UpdateConfigStore.ResolveManifestUrl(_updateConfig);
+                    _updateState.ManifestUrl = resolved;
                     UpdateStateStore.Save(_updateState);
-                    _logger.Info($"Update init: manifest source set to {_updateConfig.ManifestUrl}");
+                    var sourceLabel = UpdateConfigStore.IsDefaultManifestUrl(_updateConfig.ManifestUrl) ? "default" : "override";
+                    _logger.Info($"Update init: manifest source set to {resolved} ({sourceLabel})");
                 }
                 _updateConfigLoaded = true;
                 _logger.Info("Update init: config parsed successfully.");
