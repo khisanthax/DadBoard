@@ -16,6 +16,7 @@ public sealed class SetupForm : Form
     private readonly Button _installButton = new();
     private readonly Button _updateButton = new();
     private readonly Button _uninstallButton = new();
+    private readonly Button _startNowButton = new();
     private readonly Button _startButton = new();
     private readonly Button _closeButton = new();
     private readonly FlowLayoutPanel _actionsPanel = new();
@@ -69,11 +70,17 @@ public sealed class SetupForm : Form
         _uninstallButton.AutoSize = true;
         _uninstallButton.Click += async (_, _) => await RunActionAsync(SetupAction.Uninstall);
 
+        _startNowButton.Text = "Start DadBoard";
+        _startNowButton.AutoSize = true;
+        _startNowButton.Enabled = false;
+        _startNowButton.Click += (_, _) => LaunchInstalledApp();
+
         _actionsPanel.Controls.AddRange(new Control[]
         {
             _installButton,
             _updateButton,
-            _uninstallButton
+            _uninstallButton,
+            _startNowButton
         });
 
         _logBox.Multiline = true;
@@ -198,6 +205,7 @@ public sealed class SetupForm : Form
         _updateButton.Enabled = updateEnabled;
         _uninstallButton.Enabled = uninstallEnabled;
         _startButton.Enabled = startEnabled;
+        _startNowButton.Enabled = startEnabled;
 
         if (!canonicalRunnable && (Directory.Exists(DadBoardPaths.InstallDir) || legacyExists))
         {
