@@ -24,6 +24,8 @@ public sealed class DiagnosticsForm : Form
     private readonly TextBox _mirrorLastManifest = new();
     private readonly TextBox _mirrorLastDownload = new();
     private readonly TextBox _mirrorCached = new();
+    private readonly TextBox _manifestUrlInput = new();
+    private readonly Button _saveManifestButton = new();
     private readonly ListView _agentVersions = new();
     private readonly Label _devWarning = new();
     private readonly Button _launchInstalledButton = new();
@@ -39,9 +41,10 @@ public sealed class DiagnosticsForm : Form
 
         _layout.Dock = DockStyle.Fill;
         _layout.ColumnCount = 2;
-        _layout.RowCount = 14;
+        _layout.RowCount = 15;
         _layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
         _layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -72,12 +75,13 @@ public sealed class DiagnosticsForm : Form
         AddRow("App version", _version, 3);
         AddRow("Update source", _updateSource, 4);
         AddRow("Update source error", _updateError, 5);
-        AddRow("Mirror status", _mirrorStatus, 6);
-        AddRow("Mirror host URL", _mirrorHostUrl, 7);
-        AddRow("Last manifest fetch", _mirrorLastManifest, 8);
-        AddRow("Last zip download", _mirrorLastDownload, 9);
-        AddRow("Cached versions", _mirrorCached, 10);
-        AddRow("Logs folder", _logsPath, 11);
+        AddRow("Set manifest URL", BuildManifestEditor(), 6);
+        AddRow("Mirror status", _mirrorStatus, 7);
+        AddRow("Mirror host URL", _mirrorHostUrl, 8);
+        AddRow("Last manifest fetch", _mirrorLastManifest, 9);
+        AddRow("Last zip download", _mirrorLastDownload, 10);
+        AddRow("Cached versions", _mirrorCached, 11);
+        AddRow("Logs folder", _logsPath, 12);
 
         var agentLabel = new Label
         {
@@ -85,7 +89,7 @@ public sealed class DiagnosticsForm : Form
             TextAlign = ContentAlignment.MiddleLeft,
             Dock = DockStyle.Fill
         };
-        _layout.Controls.Add(agentLabel, 0, 12);
+        _layout.Controls.Add(agentLabel, 0, 13);
 
         _agentVersions.View = View.Details;
         _agentVersions.FullRowSelect = true;
@@ -93,7 +97,7 @@ public sealed class DiagnosticsForm : Form
         _agentVersions.Columns.Add("PC", 200);
         _agentVersions.Columns.Add("Version", 120);
         _agentVersions.Dock = DockStyle.Fill;
-        _layout.Controls.Add(_agentVersions, 1, 12);
+        _layout.Controls.Add(_agentVersions, 1, 13);
 
         var buttonPanel = new FlowLayoutPanel
         {
@@ -120,7 +124,7 @@ public sealed class DiagnosticsForm : Form
         buttonPanel.Controls.Add(_launchInstalledButton);
 
         _layout.Controls.Add(_devWarning, 0, 0);
-        _layout.Controls.Add(buttonPanel, 0, 13);
+        _layout.Controls.Add(buttonPanel, 0, 14);
         _layout.SetColumnSpan(buttonPanel, 2);
 
         Controls.Add(_layout);
@@ -143,6 +147,25 @@ public sealed class DiagnosticsForm : Form
         UpdateAgentVersions();
         LoadUpdateDetailsAsync();
         UpdateMirrorDetails();
+    }
+
+    private Control BuildManifestEditor()
+    {
+        var panel = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            AutoSize = true
+        };
+
+        _manifestUrlInput.Width = 420;
+        _saveManifestButton.Text = "Save";
+        _saveManifestButton.AutoSize = true;
+        _saveManifestButton.Click += (_, _) => SaveManifestUrl();
+
+        panel.Controls.Add(_manifestUrlInput);
+        panel.Controls.Add(_saveManifestButton);
+        return panel;
     }
 
     private void UpdateDevWarning(string runningPath)
@@ -260,6 +283,7 @@ public sealed class DiagnosticsForm : Form
 
             var (config, state, error) = task.Result;
             var source = config?.ManifestUrl ?? "";
+            _manifestUrlInput.Text = source;
             _updateSource.Text = string.IsNullOrWhiteSpace(source) ? "Not configured" : source;
 
             if (!string.IsNullOrWhiteSpace(error))
@@ -330,6 +354,19 @@ public sealed class DiagnosticsForm : Form
         }
 
         Clipboard.SetText(sb.ToString());
+    }
+
+    private void SaveManifestUrl()
+    {
+        var url = _manifestUrlInput.Text.Trim();
+        var config = UpdateConfigStore.Load();
+        config.ManifestUrl = url;
+        config.Source = string.IsNullOrWhiteSpace(url) ? "" : "github_mirror";
+        config.MirrorEnabled = !string.IsNullOrWhiteSpace(url);
+        UpdateConfigStore.Save(config);
+        _updateSource.Text = string.IsNullOrWhiteSpace(url) ? "Not configured" : url;
+        _updateError.Text = "None";
+        UpdateMirrorDetails();
     }
 
     private void LaunchInstalledAppAndExit()

@@ -21,6 +21,9 @@ public sealed class SetupForm : Form
     private readonly Button _closeButton = new();
     private readonly FlowLayoutPanel _actionsPanel = new();
     private readonly FlowLayoutPanel _finalPanel = new();
+    private readonly TextBox _manifestUrlInput = new();
+    private readonly Button _saveUpdateConfigButton = new();
+    private readonly Label _updateStatusLabel = new();
     private SetupLogger? _logger;
     private readonly CancellationTokenSource _cts = new();
 
@@ -36,8 +39,9 @@ public sealed class SetupForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 5
+            RowCount = 6
         };
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -108,8 +112,9 @@ public sealed class SetupForm : Form
         layout.Controls.Add(header, 0, 0);
         layout.Controls.Add(_statusLabel, 0, 1);
         layout.Controls.Add(_actionsPanel, 0, 2);
-        layout.Controls.Add(_logBox, 0, 3);
-        layout.Controls.Add(_finalPanel, 0, 4);
+        layout.Controls.Add(BuildUpdateConfigPanel(), 0, 3);
+        layout.Controls.Add(_logBox, 0, 4);
+        layout.Controls.Add(_finalPanel, 0, 5);
         Controls.Add(layout);
 
         FormClosed += (_, _) => _cts.Cancel();
@@ -132,6 +137,7 @@ public sealed class SetupForm : Form
         }
 
         ShowActionsView("startup");
+        LoadUpdateConfigUi();
         UpdateActionButtons();
     }
 
@@ -269,6 +275,71 @@ public sealed class SetupForm : Form
     private void AppendLog(string message)
     {
         _logBox.AppendText($"{DateTime.Now:HH:mm:ss} {message}{Environment.NewLine}");
+    }
+
+    private Control BuildUpdateConfigPanel()
+    {
+        var group = new GroupBox
+        {
+            Text = "Update source",
+            Dock = DockStyle.Fill,
+            AutoSize = true
+        };
+
+        var panel = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            AutoSize = true
+        };
+
+        _manifestUrlInput.Width = 420;
+        _saveUpdateConfigButton.Text = "Save";
+        _saveUpdateConfigButton.AutoSize = true;
+        _saveUpdateConfigButton.Click += (_, _) => SaveUpdateConfig();
+
+        _updateStatusLabel.AutoSize = true;
+        _updateStatusLabel.Text = "Not configured";
+
+        panel.Controls.Add(_manifestUrlInput);
+        panel.Controls.Add(_saveUpdateConfigButton);
+        panel.Controls.Add(_updateStatusLabel);
+        group.Controls.Add(panel);
+        return group;
+    }
+
+    private void LoadUpdateConfigUi()
+    {
+        var config = UpdateConfigStore.Load();
+        _manifestUrlInput.Text = config.ManifestUrl;
+        _updateStatusLabel.Text = GetUpdateSourceStatus(config);
+    }
+
+    private void SaveUpdateConfig()
+    {
+        var url = _manifestUrlInput.Text.Trim();
+        var config = UpdateConfigStore.Load();
+        config.ManifestUrl = url;
+        config.Source = string.IsNullOrWhiteSpace(url) ? "" : "github_mirror";
+        config.MirrorEnabled = !string.IsNullOrWhiteSpace(url);
+        UpdateConfigStore.Save(config);
+        _updateStatusLabel.Text = GetUpdateSourceStatus(config);
+        AppendLog($"Update source saved: {config.ManifestUrl}");
+    }
+
+    private static string GetUpdateSourceStatus(UpdateConfig config)
+    {
+        if (string.IsNullOrWhiteSpace(config.ManifestUrl))
+        {
+            return "Not configured";
+        }
+
+        if (config.MirrorEnabled && string.Equals(config.Source, "github_mirror", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Configured: Leader Mirror (GitHub)";
+        }
+
+        return "Configured: GitHub Direct";
     }
 
     private bool IsCanonicalRunnable(out string reason)
