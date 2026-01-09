@@ -83,11 +83,32 @@ public static class SetupOperations
             logger.Info($"Downloading package {packageUrl}");
             await DownloadPackageAsync(packageUrl, packageFile, logger, cancellationToken).ConfigureAwait(false);
 
+            if (!string.IsNullOrWhiteSpace(manifest.Sha256))
+            {
+                progress?.Report("Verifying package integrity...");
+                var expected = manifest.Sha256.Trim();
+                logger.Info($"Verifying package SHA256 expected={expected}");
+                var actual = HashUtil.ComputeSha256(packageFile);
+                if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+                {
+                    logger.Error($"SHA256 mismatch expected={expected} actual={actual}");
+                    return new SetupResult
+                    {
+                        Success = false,
+                        Error = "SHA256 mismatch for update package."
+                    };
+                }
+            }
+
             progress?.Report("Applying update...");
             logger.Info("Applying package.");
             ApplyPackage(packageFile, logger);
 
-            UpdateConfigStore.Save(new UpdateConfig { ManifestUrl = resolvedManifestUrl });
+            var config = UpdateConfigStore.Load();
+            config.ManifestUrl = resolvedManifestUrl;
+            config.Source = string.IsNullOrWhiteSpace(resolvedManifestUrl) ? "" : "github_mirror";
+            config.MirrorEnabled = !string.IsNullOrWhiteSpace(resolvedManifestUrl);
+            UpdateConfigStore.Save(config);
 
             progress?.Report("Install complete.");
             return new SetupResult { Success = true, Version = manifest.LatestVersion };

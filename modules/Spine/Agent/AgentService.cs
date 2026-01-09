@@ -559,7 +559,21 @@ public sealed class AgentService : IDisposable
             SendUpdateStatus("starting", "Starting update.");
             _logger.Info($"Update check starting. current={current} latest={latest} tokenChanged={tokenChanged}");
 
-            var ok = await RunSetupUpdateAsync(usedUrl ?? primaryUrl).ConfigureAwait(false);
+            var updateUrl = usedUrl ?? primaryUrl;
+            var ok = await RunSetupUpdateAsync(updateUrl).ConfigureAwait(false);
+            if (!ok && !string.IsNullOrWhiteSpace(fallbackUrl) &&
+                !string.Equals(updateUrl, fallbackUrl, StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.Warn($"Update failed via primary manifest; retrying fallback {fallbackUrl}");
+                SendUpdateStatus("downloading", "Primary update failed; retrying fallback.");
+                ok = await RunSetupUpdateAsync(fallbackUrl).ConfigureAwait(false);
+                if (ok)
+                {
+                    _updateState.ManifestUrl = fallbackUrl;
+                    UpdateStateStore.Save(_updateState);
+                }
+            }
+
             if (!ok)
             {
                 RegisterUpdateFailure("Updater failed.");

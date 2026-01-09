@@ -75,6 +75,8 @@ public sealed class LeaderService : IDisposable
     private string _mirrorLastError = "";
     private string _cachedVersions = "";
     private bool _updateConfigLoaded;
+    private string _lastHostIp = "";
+    private string _lastHostReason = "";
 
     public event Action? InventoriesUpdated;
 
@@ -143,6 +145,38 @@ public sealed class LeaderService : IDisposable
             CachedVersions = _cachedVersions,
             LastError = _mirrorLastError
         };
+    }
+
+    public (string Url, string Reason) GetLocalUpdateHostUrlWithReason()
+    {
+        var url = ResolveLocalHostUrl(out var reason);
+        return (url, reason);
+    }
+
+    public void ReloadUpdateConfig()
+    {
+        try
+        {
+            _updateConfig = UpdateConfigStore.Load();
+            _updateConfigLoaded = true;
+            _mirrorDisabled = false;
+            _mirrorFailures = 0;
+            _logger.Info($"Update mirror: config reloaded source={_updateConfig.Source} manifest={_updateConfig.ManifestUrl}");
+
+            if (IsMirrorEnabled())
+            {
+                StartMirrorTimer();
+            }
+            else
+            {
+                _mirrorTimer?.Dispose();
+            }
+        }
+        catch (Exception ex)
+        {
+            _mirrorLastError = ex.Message;
+            _logger.Warn($"Update mirror: config reload failed: {ex.Message}");
+        }
     }
 
     public IReadOnlyDictionary<string, GameInventory> GetAgentInventoriesSnapshot()
@@ -568,11 +602,13 @@ public sealed class LeaderService : IDisposable
                 _mirrorLastDownloadUtc = DateTime.UtcNow;
             }
 
+            var sha256 = EnsureSha256(cachedZip);
             var localHostUrl = GetLocalHostUrl();
             var localManifest = new UpdateManifest
             {
                 LatestVersion = version,
                 PackageUrl = $"{localHostUrl}/updates/DadBoard-{version}.zip",
+                Sha256 = sha256,
                 ForceCheckToken = manifest.ForceCheckToken,
                 MinSupportedVersion = manifest.MinSupportedVersion
             };
@@ -586,6 +622,7 @@ public sealed class LeaderService : IDisposable
             _mirrorLastError = "";
             _mirrorFailures = 0;
             _mirrorDisabled = false;
+            PruneCache(cacheDir, version);
             _cachedVersions = string.Join(", ", Directory.GetFiles(cacheDir, "DadBoard-*.zip")
                 .Select(Path.GetFileNameWithoutExtension)
                 .Select(name => name?.Replace("DadBoard-", "", StringComparison.OrdinalIgnoreCase))
@@ -628,6 +665,98 @@ public sealed class LeaderService : IDisposable
         await stream.CopyToAsync(file, _cts.Token).ConfigureAwait(false);
     }
 
+    private string EnsureSha256(string zipPath)
+    {
+        var shaPath = zipPath + ".sha256";
+        try
+        {
+            if (File.Exists(shaPath))
+            {
+                var existing = File.ReadAllText(shaPath).Trim();
+                if (!string.IsNullOrWhiteSpace(existing))
+                {
+                    return existing;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn($"Update mirror: failed reading sha256 for {Path.GetFileName(zipPath)}: {ex.Message}");
+        }
+
+        try
+        {
+            var sha256 = HashUtil.ComputeSha256(zipPath);
+            File.WriteAllText(shaPath, sha256);
+            _logger.Info($"Update mirror: sha256 computed for {Path.GetFileName(zipPath)}");
+            return sha256;
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn($"Update mirror: sha256 compute failed for {Path.GetFileName(zipPath)}: {ex.Message}");
+            return "";
+        }
+    }
+
+    private void PruneCache(string cacheDir, string latestVersion)
+    {
+        if (!Directory.Exists(cacheDir))
+        {
+            return;
+        }
+
+        var entries = Directory.GetFiles(cacheDir, "DadBoard-*.zip")
+            .Select(path => (path, version: ParseVersionFromFileName(Path.GetFileName(path))))
+            .Where(entry => !string.IsNullOrWhiteSpace(entry.version))
+            .OrderByDescending(entry => entry.version, new VersionComparer())
+            .ToList();
+
+        if (entries.Count <= 3)
+        {
+            return;
+        }
+
+        var keep = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var latestPath = Path.Combine(cacheDir, $"DadBoard-{latestVersion}.zip");
+        if (File.Exists(latestPath))
+        {
+            keep.Add(latestPath);
+        }
+
+        foreach (var entry in entries)
+        {
+            if (keep.Count >= 3)
+            {
+                break;
+            }
+
+            keep.Add(entry.path);
+        }
+
+        foreach (var entry in entries)
+        {
+            if (keep.Contains(entry.path))
+            {
+                continue;
+            }
+
+            try
+            {
+                File.Delete(entry.path);
+                var shaPath = entry.path + ".sha256";
+                if (File.Exists(shaPath))
+                {
+                    File.Delete(shaPath);
+                }
+                _logger.Info($"Update mirror: pruned {Path.GetFileName(entry.path)}");
+            }
+            catch (Exception ex)
+            {
+                _logger.Warn($"Update mirror: prune failed for {entry.path}: {ex.Message}");
+            }
+        }
+    }
+
     private void RegisterMirrorFailure(string error)
     {
         _mirrorLastError = error;
@@ -644,15 +773,37 @@ public sealed class LeaderService : IDisposable
 
     private string GetLocalHostUrl()
     {
+        return ResolveLocalHostUrl(out _);
+    }
+
+    private string ResolveLocalHostUrl(out string reason)
+    {
+        string ip;
         if (!string.IsNullOrWhiteSpace(_updateConfig.LocalHostIp))
         {
-            return $"http://{_updateConfig.LocalHostIp}:{GetUpdateHostPort()}";
+            ip = _updateConfig.LocalHostIp;
+            reason = "config override";
+        }
+        else
+        {
+            ip = _localIps.FirstOrDefault(addr => !string.Equals(addr, "127.0.0.1", StringComparison.OrdinalIgnoreCase)) ?? "";
+            if (string.IsNullOrWhiteSpace(ip))
+            {
+                ip = "127.0.0.1";
+                reason = "fallback loopback";
+            }
+            else
+            {
+                reason = "auto non-loopback";
+            }
         }
 
-        var ip = _localIps.FirstOrDefault(addr => !string.Equals(addr, "127.0.0.1", StringComparison.OrdinalIgnoreCase));
-        if (string.IsNullOrWhiteSpace(ip))
+        if (!string.Equals(ip, _lastHostIp, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(reason, _lastHostReason, StringComparison.OrdinalIgnoreCase))
         {
-            ip = "127.0.0.1";
+            _lastHostIp = ip;
+            _lastHostReason = reason;
+            _logger.Info($"Update host IP selected: {ip} ({reason})");
         }
 
         return $"http://{ip}:{GetUpdateHostPort()}";
@@ -691,6 +842,32 @@ public sealed class LeaderService : IDisposable
             if (manifest.PackageUrl.StartsWith("/", StringComparison.Ordinal))
             {
                 manifest.PackageUrl = $"{context.Request.Scheme}://{context.Request.Host}{manifest.PackageUrl}";
+            }
+
+            if (string.IsNullOrWhiteSpace(manifest.Sha256))
+            {
+                try
+                {
+                    var fileName = Path.GetFileName(new Uri(manifest.PackageUrl).LocalPath);
+                    if (!string.IsNullOrWhiteSpace(fileName))
+                    {
+                        var localPath = Path.Combine(DadBoardPaths.UpdateSourceDir, fileName);
+                        if (!File.Exists(localPath))
+                        {
+                            localPath = Path.Combine(DadBoardPaths.UpdateSourceDir, "cache", fileName);
+                        }
+
+                        var shaPath = localPath + ".sha256";
+                        if (File.Exists(shaPath))
+                        {
+                            manifest.Sha256 = File.ReadAllText(shaPath).Trim();
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.Warn($"Update manifest sha256 lookup failed: {ex.Message}");
+                }
             }
 
             return manifest;

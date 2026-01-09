@@ -22,6 +22,7 @@ public sealed class SetupForm : Form
     private readonly FlowLayoutPanel _actionsPanel = new();
     private readonly FlowLayoutPanel _finalPanel = new();
     private readonly TextBox _manifestUrlInput = new();
+    private readonly TextBox _localHostIpInput = new();
     private readonly Button _saveUpdateConfigButton = new();
     private readonly Label _updateStatusLabel = new();
     private SetupLogger? _logger;
@@ -293,7 +294,22 @@ public sealed class SetupForm : Form
             AutoSize = true
         };
 
+        var manifestLabel = new Label
+        {
+            Text = "Manifest URL",
+            AutoSize = true,
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+
+        var hostLabel = new Label
+        {
+            Text = "Local host IP",
+            AutoSize = true,
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+
         _manifestUrlInput.Width = 420;
+        _localHostIpInput.Width = 140;
         _saveUpdateConfigButton.Text = "Save";
         _saveUpdateConfigButton.AutoSize = true;
         _saveUpdateConfigButton.Click += (_, _) => SaveUpdateConfig();
@@ -301,7 +317,10 @@ public sealed class SetupForm : Form
         _updateStatusLabel.AutoSize = true;
         _updateStatusLabel.Text = "Not configured";
 
+        panel.Controls.Add(manifestLabel);
         panel.Controls.Add(_manifestUrlInput);
+        panel.Controls.Add(hostLabel);
+        panel.Controls.Add(_localHostIpInput);
         panel.Controls.Add(_saveUpdateConfigButton);
         panel.Controls.Add(_updateStatusLabel);
         group.Controls.Add(panel);
@@ -312,14 +331,17 @@ public sealed class SetupForm : Form
     {
         var config = UpdateConfigStore.Load();
         _manifestUrlInput.Text = config.ManifestUrl;
+        _localHostIpInput.Text = config.LocalHostIp;
         _updateStatusLabel.Text = GetUpdateSourceStatus(config);
     }
 
     private void SaveUpdateConfig()
     {
         var url = _manifestUrlInput.Text.Trim();
+        var hostIp = _localHostIpInput.Text.Trim();
         var config = UpdateConfigStore.Load();
         config.ManifestUrl = url;
+        config.LocalHostIp = hostIp;
         config.Source = string.IsNullOrWhiteSpace(url) ? "" : "github_mirror";
         config.MirrorEnabled = !string.IsNullOrWhiteSpace(url);
         UpdateConfigStore.Save(config);
