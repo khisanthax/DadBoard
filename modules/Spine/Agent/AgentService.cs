@@ -525,7 +525,7 @@ public sealed class AgentService : IDisposable
         try
         {
             _logger.Info($"Update init: resolving manifest primary={primaryUrl} fallback={fallbackUrl}");
-            var (manifest, error) = await TryLoadManifestWithFallback(primaryUrl, fallbackUrl).ConfigureAwait(false);
+            var (manifest, error, usedUrl) = await TryLoadManifestWithFallback(primaryUrl, fallbackUrl).ConfigureAwait(false);
             if (manifest == null)
             {
                 RegisterUpdateFailure(error ?? "Manifest unavailable.");
@@ -559,7 +559,7 @@ public sealed class AgentService : IDisposable
             SendUpdateStatus("starting", "Starting update.");
             _logger.Info($"Update check starting. current={current} latest={latest} tokenChanged={tokenChanged}");
 
-            var ok = await RunSetupUpdateAsync(manifestUrl).ConfigureAwait(false);
+            var ok = await RunSetupUpdateAsync(usedUrl ?? primaryUrl).ConfigureAwait(false);
             if (!ok)
             {
                 RegisterUpdateFailure("Updater failed.");
@@ -577,14 +577,14 @@ public sealed class AgentService : IDisposable
         }
     }
 
-    private async Task<(UpdateManifest? Manifest, string? Error)> TryLoadManifestWithFallback(string primaryUrl, string fallbackUrl)
+    private async Task<(UpdateManifest? Manifest, string? Error, string? UsedUrl)> TryLoadManifestWithFallback(string primaryUrl, string fallbackUrl)
     {
         if (!string.IsNullOrWhiteSpace(primaryUrl))
         {
             var (manifest, error) = await TryLoadManifestAsync(primaryUrl).ConfigureAwait(false);
             if (manifest != null)
             {
-                return (manifest, null);
+                return (manifest, null, primaryUrl);
             }
 
             _logger.Warn($"Update init: primary manifest failed: {error}");
@@ -598,13 +598,13 @@ public sealed class AgentService : IDisposable
             {
                 _logger.Info("Update init: fallback manifest succeeded.");
                 _updateState.ManifestUrl = fallbackUrl;
-                return (manifest, null);
+                return (manifest, null, fallbackUrl);
             }
 
-            return (null, error);
+            return (null, error, null);
         }
 
-        return (null, "Manifest unavailable.");
+        return (null, "Manifest unavailable.", null);
     }
 
     private async Task<(UpdateManifest? Manifest, string? Error)> TryLoadManifestAsync(string manifestUrl)
