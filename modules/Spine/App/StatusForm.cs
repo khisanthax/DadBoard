@@ -13,12 +13,15 @@ sealed class StatusForm : Form
     private readonly DataGridView _connectionsGrid = new();
     private readonly System.Windows.Forms.Timer _refreshTimer = new();
     private LeaderService? _leader;
+    private bool _timerStopped;
 
     public StatusForm()
     {
         Text = "DadBoard Status";
         Size = new Size(900, 520);
         StartPosition = FormStartPosition.CenterScreen;
+        FormClosing += (_, _) => StopRefreshTimer();
+        FormClosed += (_, _) => StopRefreshTimer();
 
         var layout = new TableLayoutPanel
         {
@@ -83,6 +86,16 @@ sealed class StatusForm : Form
 
     private void RefreshData()
     {
+        if (IsDisposed || Disposing || _agentsGrid.IsDisposed || _connectionsGrid.IsDisposed)
+        {
+            return;
+        }
+
+        if (_agentsGrid.Columns.Count == 0 || _connectionsGrid.Columns.Count == 0)
+        {
+            return;
+        }
+
         if (_leader == null)
         {
             _header.Text = "Leader is disabled. Enable Leader to see discovery and connections.";
@@ -126,5 +139,27 @@ sealed class StatusForm : Form
                 conn.LastError
             );
         }
+    }
+
+    private void StopRefreshTimer()
+    {
+        if (_timerStopped)
+        {
+            return;
+        }
+
+        _timerStopped = true;
+        try
+        {
+            if (_refreshTimer.Enabled)
+            {
+                _refreshTimer.Stop();
+            }
+        }
+        catch
+        {
+        }
+
+        _refreshTimer.Dispose();
     }
 }

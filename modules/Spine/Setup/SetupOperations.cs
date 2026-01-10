@@ -209,6 +209,7 @@ public static class SetupOperations
 
         CopyDirectory(stagingDir, DadBoardPaths.InstallDir);
         CopySetupIntoInstallDir(logger);
+        CreateDesktopShortcut(logger);
 
         try
         {
@@ -305,6 +306,55 @@ public static class SetupOperations
         {
             logger.Warn($"Failed to copy setup into install dir: {ex.Message}");
         }
+    }
+
+    private static void CreateDesktopShortcut(SetupLogger logger)
+    {
+        try
+        {
+            var desktopDir = ResolveDesktopDirectory();
+            if (string.IsNullOrWhiteSpace(desktopDir))
+            {
+                logger.Warn("Desktop shortcut skipped: no desktop directory found.");
+                return;
+            }
+
+            Directory.CreateDirectory(desktopDir);
+            var shortcutPath = Path.Combine(desktopDir, "DadBoard.lnk");
+            var shellType = Type.GetTypeFromProgID("WScript.Shell");
+            if (shellType == null)
+            {
+                logger.Warn("Desktop shortcut skipped: WScript.Shell unavailable.");
+                return;
+            }
+
+            dynamic shell = Activator.CreateInstance(shellType)!;
+            dynamic shortcut = shell.CreateShortcut(shortcutPath);
+            shortcut.TargetPath = DadBoardPaths.InstalledExePath;
+            shortcut.WorkingDirectory = DadBoardPaths.InstallDir;
+            shortcut.IconLocation = DadBoardPaths.InstalledExePath;
+            shortcut.Save();
+            logger.Info($"Desktop shortcut created at {shortcutPath}");
+        }
+        catch (Exception ex)
+        {
+            logger.Warn($"Desktop shortcut creation failed: {ex.Message}");
+        }
+    }
+
+    private static string ResolveDesktopDirectory()
+    {
+        var oneDrive = Environment.GetEnvironmentVariable("OneDrive");
+        if (!string.IsNullOrWhiteSpace(oneDrive))
+        {
+            var oneDriveDesktop = Path.Combine(oneDrive, "Desktop");
+            if (Directory.Exists(oneDriveDesktop))
+            {
+                return oneDriveDesktop;
+            }
+        }
+
+        return Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
     }
 
     private static void SignalShutdown(SetupLogger logger)
