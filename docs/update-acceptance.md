@@ -1,11 +1,6 @@
 # DadBoard Update Acceptance Test (Baseline v0.1.0.1 -> v0.1.1)
 
-This verifies the stable update path using a corrected baseline release.
-
-## Baseline note
-Releases prior to v0.1.0.1 may contain binaries stamped as 1.0.0+<sha>, which breaks semver update ordering. Use v0.1.0.1 as the first correct-by-default baseline.
-
-## One-bundle PowerShell (copy/paste once)
+## One-bundle PowerShell (copy/paste ONLY this block)
 ```powershell
 Write-Host "=== DadBoard Baseline Setup v0.1.0.1 ==="
 
@@ -39,9 +34,11 @@ Invoke-WebRequest -Uri $ZipUrl -OutFile $ZipPath -UseBasicParsing
 Write-Host "[4/7] Extracting zip to install dir..."
 Expand-Archive -Path $ZipPath -DestinationPath $InstallDir -Force
 
-Write-Host "[5/7] Installed ProductVersion:"
+Write-Host "[5/7] Installed version info:"
 if (Test-Path $ExePath) {
-  (Get-Item $ExePath).VersionInfo.ProductVersion
+  $info = (Get-Item $ExePath).VersionInfo
+  Write-Host "ProductVersion=$($info.ProductVersion)"
+  Write-Host "FileVersion=$($info.FileVersion)"
 } else {
   Write-Host "DadBoard.exe not found at $ExePath"
 }
@@ -54,8 +51,11 @@ Write-Host "[7/7] NEXT ACTION:"
 Write-Host "Run DadBoard.exe, open Diagnostics, set channel Stable and manifest to $Manifest11, confirm Available 0.1.1, then click Update."
 ```
 
+## Baseline note
+Releases prior to v0.1.0.1 may contain binaries stamped as 1.0.0+<sha>, which breaks semver update ordering. Use v0.1.0.1 as the first correct-by-default baseline.
+
 ## Expected output
-- Installed ProductVersion prints `0.1.0.1` (or `0.1.0.1.0`).
+- FileVersion prints `0.1.0.1` (or `0.1.0.1.0`). ProductVersion may include `+<sha>` and is OK.
 - Manifest latest_version prints `0.1.1`.
 
 ## Final step
