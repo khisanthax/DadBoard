@@ -24,18 +24,33 @@ jobs:
         with:
           dotnet-version: "8.0.x"
 
+      - name: Set version
+        shell: pwsh
+        run: |
+          $baseVersion = "0.1.0"
+          $version = "$baseVersion-nightly.${{ github.run_number }}"
+          $shortSha = "${{ github.sha }}".Substring(0,7)
+          $assemblyVersion = "$baseVersion.0"
+          $infoVersion = "$version+$shortSha"
+          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "BASE_VERSION=$baseVersion" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ASSEMBLY_VERSION=$assemblyVersion" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "FILE_VERSION=$assemblyVersion" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "INFO_VERSION=$infoVersion" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Publish DadBoard
-        run: dotnet publish -c Release -r win-x64 /p:PublishSingleFile=true /p:SelfContained=true
+        run: dotnet publish -c Release -r win-x64 /p:PublishSingleFile=true /p:SelfContained=true /p:Version=$env:VERSION /p:AssemblyVersion=$env:ASSEMBLY_VERSION /p:FileVersion=$env:FILE_VERSION /p:InformationalVersion=$env:INFO_VERSION
         working-directory: modules/Spine/App
 
       - name: Publish DadBoardSetup
-        run: dotnet publish -c Release -r win-x64 /p:PublishSingleFile=true /p:SelfContained=true
+        run: dotnet publish -c Release -r win-x64 /p:PublishSingleFile=true /p:SelfContained=true /p:Version=$env:VERSION /p:AssemblyVersion=$env:ASSEMBLY_VERSION /p:FileVersion=$env:FILE_VERSION /p:InformationalVersion=$env:INFO_VERSION
         working-directory: modules/Spine/Setup
 
       - name: Build release assets
         shell: pwsh
         run: |
-          $version = "0.1.0-alpha.${{ github.run_number }}"
+          $version = $env:VERSION
+          $baseVersion = $env:BASE_VERSION
           $publishApp = "modules/Spine/App/bin/Release/net8.0-windows/win-x64/publish"
           $publishSetup = "modules/Spine/Setup/bin/Release/net8.0-windows/win-x64/publish"
           $payloadDir = "release_payload"
@@ -55,7 +70,7 @@ jobs:
             latest_version = $version
             package_url = $packageUrl
             force_check_token = $token
-            min_supported_version = "0.1.0"
+            min_supported_version = $baseVersion
           } | ConvertTo-Json -Depth 5
           Set-Content -Path "latest.json" -Value $latest -Encoding utf8
 
@@ -88,18 +103,32 @@ jobs:
         with:
           dotnet-version: "8.0.x"
 
+      - name: Set version
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          $shortSha = "${{ github.sha }}".Substring(0,7)
+          $assemblyVersion = "$version.0"
+          $infoVersion = "$version+$shortSha"
+          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "BASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ASSEMBLY_VERSION=$assemblyVersion" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "FILE_VERSION=$assemblyVersion" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "INFO_VERSION=$infoVersion" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Publish DadBoard
-        run: dotnet publish -c Release -r win-x64 /p:PublishSingleFile=true /p:SelfContained=true
+        run: dotnet publish -c Release -r win-x64 /p:PublishSingleFile=true /p:SelfContained=true /p:Version=$env:VERSION /p:AssemblyVersion=$env:ASSEMBLY_VERSION /p:FileVersion=$env:FILE_VERSION /p:InformationalVersion=$env:INFO_VERSION
         working-directory: modules/Spine/App
 
       - name: Publish DadBoardSetup
-        run: dotnet publish -c Release -r win-x64 /p:PublishSingleFile=true /p:SelfContained=true
+        run: dotnet publish -c Release -r win-x64 /p:PublishSingleFile=true /p:SelfContained=true /p:Version=$env:VERSION /p:AssemblyVersion=$env:ASSEMBLY_VERSION /p:FileVersion=$env:FILE_VERSION /p:InformationalVersion=$env:INFO_VERSION
         working-directory: modules/Spine/Setup
 
       - name: Build release assets
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}".TrimStart("v")
+          $version = $env:VERSION
+          $baseVersion = $env:BASE_VERSION
           $publishApp = "modules/Spine/App/bin/Release/net8.0-windows/win-x64/publish"
           $publishSetup = "modules/Spine/Setup/bin/Release/net8.0-windows/win-x64/publish"
           $payloadDir = "release_payload"
@@ -119,7 +148,7 @@ jobs:
             latest_version = $version
             package_url = $packageUrl
             force_check_token = $token
-            min_supported_version = "0.1.0"
+            min_supported_version = $baseVersion
           } | ConvertTo-Json -Depth 5
           Set-Content -Path "latest.json" -Value $latest -Encoding utf8
 
