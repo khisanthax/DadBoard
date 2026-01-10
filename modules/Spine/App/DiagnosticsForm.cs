@@ -22,6 +22,8 @@ public sealed class DiagnosticsForm : Form
     private readonly TextBox _expectedPath = new();
     private readonly TextBox _version = new();
     private readonly TextBox _updateChannel = new();
+    private readonly TextBox _availableVersion = new();
+    private readonly TextBox _updateDecision = new();
     private readonly TextBox _updateSource = new();
     private readonly TextBox _logsPath = new();
     private readonly TextBox _updateError = new();
@@ -56,7 +58,7 @@ public sealed class DiagnosticsForm : Form
 
         _layout.Dock = DockStyle.Fill;
         _layout.ColumnCount = 2;
-        _layout.RowCount = 17;
+        _layout.RowCount = 19;
         _layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
         _layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -76,6 +78,7 @@ public sealed class DiagnosticsForm : Form
         _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         _devWarning.AutoSize = true;
         _devWarning.ForeColor = Color.DarkRed;
@@ -92,16 +95,18 @@ public sealed class DiagnosticsForm : Form
         AddRow("Expected install", _expectedPath, 2);
         AddRow("App version", _version, 3);
         AddRow("Update channel", _updateChannel, 4);
-        AddRow("Update source", _updateSource, 5);
-        AddRow("Update source error", _updateError, 6);
-        AddRow("Advanced / Override manifest URL", BuildManifestEditor(), 7);
-        AddRow("Mirror status", _mirrorStatus, 8);
-        AddRow("Mirror host URL", _mirrorHostUrl, 9);
-        AddRow("Last manifest fetch", _mirrorLastManifest, 10);
-        AddRow("Last zip download", _mirrorLastDownload, 11);
-        AddRow("Cached versions", _mirrorCached, 12);
-        AddRow("Logs folder", _logsPath, 13);
-        AddRow("Update self-test", BuildSelfTestPanel(), 14);
+        AddRow("Available version", _availableVersion, 5);
+        AddRow("Update decision", _updateDecision, 6);
+        AddRow("Update source", _updateSource, 7);
+        AddRow("Update source error", _updateError, 8);
+        AddRow("Advanced / Override manifest URL", BuildManifestEditor(), 9);
+        AddRow("Mirror status", _mirrorStatus, 10);
+        AddRow("Mirror host URL", _mirrorHostUrl, 11);
+        AddRow("Last manifest fetch", _mirrorLastManifest, 12);
+        AddRow("Last zip download", _mirrorLastDownload, 13);
+        AddRow("Cached versions", _mirrorCached, 14);
+        AddRow("Logs folder", _logsPath, 15);
+        AddRow("Update self-test", BuildSelfTestPanel(), 16);
 
         var agentLabel = new Label
         {
@@ -109,7 +114,7 @@ public sealed class DiagnosticsForm : Form
             TextAlign = ContentAlignment.MiddleLeft,
             Dock = DockStyle.Fill
         };
-        _layout.Controls.Add(agentLabel, 0, 15);
+        _layout.Controls.Add(agentLabel, 0, 17);
 
         _agentVersions.View = View.Details;
         _agentVersions.FullRowSelect = true;
@@ -117,7 +122,7 @@ public sealed class DiagnosticsForm : Form
         _agentVersions.Columns.Add("PC", 200);
         _agentVersions.Columns.Add("Version", 120);
         _agentVersions.Dock = DockStyle.Fill;
-        _layout.Controls.Add(_agentVersions, 1, 15);
+        _layout.Controls.Add(_agentVersions, 1, 17);
 
         var buttonPanel = new FlowLayoutPanel
         {
@@ -144,7 +149,7 @@ public sealed class DiagnosticsForm : Form
         buttonPanel.Controls.Add(_launchInstalledButton);
 
         _layout.Controls.Add(_devWarning, 0, 0);
-        _layout.Controls.Add(buttonPanel, 0, 16);
+        _layout.Controls.Add(buttonPanel, 0, 18);
         _layout.SetColumnSpan(buttonPanel, 2);
 
         Controls.Add(_layout);
@@ -160,6 +165,8 @@ public sealed class DiagnosticsForm : Form
         _expectedPath.Text = DadBoardPaths.InstalledExePath;
         _version.Text = VersionUtil.GetCurrentVersion();
         _updateChannel.Text = "Loading...";
+        _availableVersion.Text = "Loading...";
+        _updateDecision.Text = "Loading...";
         _updateSource.Text = "Loading...";
         _updateError.Text = "";
         _logsPath.Text = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DadBoard", "logs");
@@ -407,7 +414,45 @@ public sealed class DiagnosticsForm : Form
             {
                 _updateError.Text = "None";
             }
+
+            LoadAvailableVersionAsync(resolved);
         }, System.Threading.Tasks.TaskScheduler.FromCurrentSynchronizationContext());
+    }
+
+    private void LoadAvailableVersionAsync(string resolvedUrl)
+    {
+        if (string.IsNullOrWhiteSpace(resolvedUrl))
+        {
+            _availableVersion.Text = "-";
+            _updateDecision.Text = "Unknown";
+            return;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            var manifest = await FetchManifestAsync(resolvedUrl).ConfigureAwait(false);
+            return manifest?.LatestVersion ?? "";
+        }).ContinueWith(task =>
+        {
+            if (IsDisposed || Disposing)
+            {
+                return;
+            }
+
+            var latest = task.IsFaulted ? "" : task.Result;
+            latest = VersionUtil.Normalize(latest);
+            if (string.IsNullOrWhiteSpace(latest))
+            {
+                _availableVersion.Text = "-";
+                _updateDecision.Text = "Unknown";
+                return;
+            }
+
+            _availableVersion.Text = latest;
+            var installed = VersionUtil.Normalize(_version.Text);
+            var decision = VersionUtil.Compare(latest, installed) > 0 ? "Update available" : "Up-to-date";
+            _updateDecision.Text = decision;
+        }, TaskScheduler.FromCurrentSynchronizationContext());
     }
 
     private void OpenLogsFolder()
@@ -429,6 +474,8 @@ public sealed class DiagnosticsForm : Form
         sb.AppendLine($"Expected install: {_expectedPath.Text}");
         sb.AppendLine($"Version: {_version.Text}");
         sb.AppendLine($"Update channel: {_updateChannel.Text}");
+        sb.AppendLine($"Available version: {_availableVersion.Text}");
+        sb.AppendLine($"Update decision: {_updateDecision.Text}");
         sb.AppendLine($"Update source: {_updateSource.Text}");
         sb.AppendLine($"Update source error: {_updateError.Text}");
         sb.AppendLine($"Mirror status: {_mirrorStatus.Text}");

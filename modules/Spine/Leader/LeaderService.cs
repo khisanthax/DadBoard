@@ -75,6 +75,7 @@ public sealed class LeaderService : IDisposable
     private DateTime _mirrorLastDownloadUtc;
     private string _mirrorLastError = "";
     private string _cachedVersions = "";
+    private string _mirrorLatestVersion = "";
     private bool _updateConfigLoaded;
     private string _lastHostIp = "";
     private string _lastHostReason = "";
@@ -138,6 +139,7 @@ public sealed class LeaderService : IDisposable
         {
             Enabled = _updateConfig.MirrorEnabled && string.Equals(_updateConfig.Source, "github_mirror", StringComparison.OrdinalIgnoreCase),
             ManifestUrl = UpdateConfigStore.ResolveManifestUrl(_updateConfig),
+            LatestVersion = _mirrorLatestVersion,
             LocalHostUrl = _mirrorLocalHostUrl,
             LastManifestFetchUtc = _mirrorLastManifestFetchUtc == default ? "" : _mirrorLastManifestFetchUtc.ToString("O"),
             LastManifestResult = _mirrorLastManifestResult,
@@ -146,6 +148,23 @@ public sealed class LeaderService : IDisposable
             CachedVersions = _cachedVersions,
             LastError = _mirrorLastError
         };
+    }
+
+    public string GetAvailableVersion()
+    {
+        if (!string.IsNullOrWhiteSpace(_mirrorLatestVersion))
+        {
+            return _mirrorLatestVersion;
+        }
+
+        var localManifest = Path.Combine(DadBoardPaths.UpdateSourceDir, "latest.json");
+        var version = TryReadManifestVersion(localManifest);
+        if (!string.IsNullOrWhiteSpace(version))
+        {
+            _mirrorLatestVersion = version;
+        }
+
+        return _mirrorLatestVersion;
     }
 
     public (string Url, string Reason) GetLocalUpdateHostUrlWithReason()
@@ -595,6 +614,7 @@ public sealed class LeaderService : IDisposable
                 RegisterMirrorFailure("Manifest missing version.");
                 return;
             }
+            _mirrorLatestVersion = version;
 
             var cacheDir = Path.Combine(DadBoardPaths.UpdateSourceDir, "cache");
             Directory.CreateDirectory(cacheDir);
@@ -958,8 +978,7 @@ public sealed class LeaderService : IDisposable
 
         try
         {
-            var info = System.Diagnostics.FileVersionInfo.GetVersionInfo(runtimePath);
-            version = VersionUtil.Normalize(info.FileVersion ?? "0.0.0");
+            version = VersionUtil.GetVersionFromFile(runtimePath);
             sha256 = HashUtil.ComputeSha256(runtimePath);
             return true;
         }

@@ -421,6 +421,10 @@ public sealed class LeaderForm : Form
 
             var selectedPcId = GetSelectedAgentPcId();
             var snapshot = _service.GetAgentsSnapshot();
+            var availableVersion = _service.GetAvailableVersion();
+            var normalizedAvailable = string.IsNullOrWhiteSpace(availableVersion)
+                ? ""
+                : VersionUtil.Normalize(availableVersion);
             _agentsGrid.Rows.Clear();
 
             foreach (var agent in snapshot)
@@ -431,7 +435,16 @@ public sealed class LeaderForm : Form
                 var resultText = string.IsNullOrWhiteSpace(agent.LastResult) ? "-" : agent.LastResult;
                 var lastError = agent.LastError ?? "";
                 var truncatedError = Truncate(lastError, 60);
-                var version = string.IsNullOrWhiteSpace(agent.Version) ? "-" : agent.Version;
+                var version = string.IsNullOrWhiteSpace(agent.Version) ? "-" : VersionUtil.Normalize(agent.Version);
+                var availableDisplay = string.IsNullOrWhiteSpace(normalizedAvailable) ? "-" : normalizedAvailable;
+                var decision = "Unknown";
+                if (!string.IsNullOrWhiteSpace(version) && version != "-" &&
+                    !string.IsNullOrWhiteSpace(normalizedAvailable))
+                {
+                    decision = VersionUtil.Compare(normalizedAvailable, version) > 0
+                        ? "Update available"
+                        : "Up-to-date";
+                }
                 var updateStatus = FormatUpdateStatus(agent.UpdateStatus);
 
                 _agentsGrid.Rows.Add(
@@ -440,6 +453,8 @@ public sealed class LeaderForm : Form
                     agent.Name,
                     onlineText,
                     version,
+                    availableDisplay,
+                    decision,
                     commandStatus,
                     updateStatus,
                     ackText,
@@ -591,6 +606,8 @@ public sealed class LeaderForm : Form
         _agentsGrid.Columns.Add("name", "PC Name");
         _agentsGrid.Columns.Add("online", "Online");
         _agentsGrid.Columns.Add("version", "Version");
+        _agentsGrid.Columns.Add("available", "Available");
+        _agentsGrid.Columns.Add("decision", "Update Decision");
         _agentsGrid.Columns.Add("command", "Command Status");
         _agentsGrid.Columns.Add("update", "Update Status");
         _agentsGrid.Columns.Add("ack", "Ack");

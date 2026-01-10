@@ -1077,8 +1077,7 @@ public sealed class AgentService : IDisposable
                 return "0.0.0";
             }
 
-            var info = FileVersionInfo.GetVersionInfo(path);
-            return VersionUtil.Normalize(info.FileVersion ?? "0.0.0");
+            return VersionUtil.GetVersionFromFile(path);
         }
         catch
         {

@@ -51,6 +51,7 @@ public sealed class UpdateMirrorSnapshot
 {
     public bool Enabled { get; set; }
     public string ManifestUrl { get; set; } = "";
+    public string LatestVersion { get; set; } = "";
     public string LocalHostUrl { get; set; } = "";
     public string LastManifestFetchUtc { get; set; } = "";
     public string LastManifestResult { get; set; } = "";
