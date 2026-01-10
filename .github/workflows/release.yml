@@ -4,10 +4,77 @@ on:
   push:
     tags:
       - "v*"
+    branches:
+      - "main"
   workflow_dispatch:
 
 jobs:
-  release:
+  nightly:
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Publish DadBoard
+        run: dotnet publish -c Release -r win-x64 /p:PublishSingleFile=true /p:SelfContained=true
+        working-directory: modules/Spine/App
+
+      - name: Publish DadBoardSetup
+        run: dotnet publish -c Release -r win-x64 /p:PublishSingleFile=true /p:SelfContained=true
+        working-directory: modules/Spine/Setup
+
+      - name: Build release assets
+        shell: pwsh
+        run: |
+          $version = "0.1.0-alpha.${{ github.run_number }}"
+          $publishApp = "modules/Spine/App/bin/Release/net8.0-windows/win-x64/publish"
+          $publishSetup = "modules/Spine/Setup/bin/Release/net8.0-windows/win-x64/publish"
+          $payloadDir = "release_payload"
+
+          New-Item -ItemType Directory -Force $payloadDir | Out-Null
+          Copy-Item "$publishApp/DadBoard.exe" $payloadDir -Force
+          Copy-Item "$publishApp/DadBoard.exe" "DadBoard.exe" -Force
+          Copy-Item "$publishSetup/DadBoardSetup.exe" "DadBoardSetup.exe" -Force
+
+          $zipName = "DadBoard-$version.zip"
+          if (Test-Path $zipName) { Remove-Item $zipName -Force }
+          Compress-Archive -Path "$payloadDir/*" -DestinationPath $zipName -Force
+
+          $token = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+          $packageUrl = "https://github.com/${{ github.repository }}/releases/download/nightly/$zipName"
+          $latest = @{
+            latest_version = $version
+            package_url = $packageUrl
+            force_check_token = $token
+            min_supported_version = "0.1.0"
+          } | ConvertTo-Json -Depth 5
+          Set-Content -Path "latest.json" -Value $latest -Encoding utf8
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: Nightly
+          prerelease: true
+          target_commitish: ${{ github.sha }}
+          overwrite: true
+          files: |
+            DadBoard-*.zip
+            DadBoard.exe
+            DadBoardSetup.exe
+            latest.json
+
+  stable:
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
     permissions:
       contents: write
@@ -52,7 +119,7 @@ jobs:
             latest_version = $version
             package_url = $packageUrl
             force_check_token = $token
-            min_supported_version = "1.0.0"
+            min_supported_version = "0.1.0"
           } | ConvertTo-Json -Depth 5
           Set-Content -Path "latest.json" -Value $latest -Encoding utf8
 
