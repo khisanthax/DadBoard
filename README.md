@@ -13,3 +13,6 @@ DadBoard is a simple Windows LAN dashboard to launch a selected Steam game on mu
 4) On Dad PC, run `python controller/DadBoardApp.py`.
 
 See `client/README-client.md` and `controller/README-controller.md` for details.
+
+## Release baseline note
+Releases prior to v0.1.0.1 may include binaries stamped as 1.0.0+<sha>, which breaks semver update ordering. Use v0.1.0.1 as the first correct-by-default baseline for update testing.

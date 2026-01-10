@@ -103,12 +103,33 @@ public static class VersionUtil
 
         var minor = parts.Length > 1 && int.TryParse(parts[1], out var parsedMinor) ? parsedMinor : 0;
         var patch = parts.Length > 2 && int.TryParse(parts[2], out var parsedPatch) ? parsedPatch : 0;
+        var revision = 0;
+        var hasRevision = false;
+        if (parts.Length > 3)
+        {
+            if (!int.TryParse(parts[3], out revision))
+            {
+                return false;
+            }
+            hasRevision = true;
+        }
+
+        if (parts.Length > 4)
+        {
+            for (var i = 4; i < parts.Length; i++)
+            {
+                if (!int.TryParse(parts[i], out var extra) || extra != 0)
+                {
+                    return false;
+                }
+            }
+        }
 
         var identifiers = string.IsNullOrWhiteSpace(prerelease)
             ? Array.Empty<string>()
             : prerelease.Split('.', StringSplitOptions.RemoveEmptyEntries);
 
-        semver = new SemVer(major, minor, patch, identifiers, build);
+        semver = new SemVer(major, minor, patch, revision, hasRevision, identifiers, build);
         return true;
     }
 
@@ -117,14 +138,18 @@ public static class VersionUtil
         public readonly int Major;
         public readonly int Minor;
         public readonly int Patch;
+        public readonly int Revision;
+        public readonly bool HasRevision;
         public readonly string[] PreRelease;
         public readonly string Build;
 
-        public SemVer(int major, int minor, int patch, string[] preRelease, string build)
+        public SemVer(int major, int minor, int patch, int revision, bool hasRevision, string[] preRelease, string build)
         {
             Major = major;
             Minor = minor;
             Patch = patch;
+            Revision = revision;
+            HasRevision = hasRevision;
             PreRelease = preRelease;
             Build = build;
         }
@@ -144,6 +169,12 @@ public static class VersionUtil
             }
 
             diff = Patch.CompareTo(other.Patch);
+            if (diff != 0)
+            {
+                return diff;
+            }
+
+            diff = Revision.CompareTo(other.Revision);
             if (diff != 0)
             {
                 return diff;
@@ -213,6 +244,11 @@ public static class VersionUtil
         public override string ToString()
         {
             var core = $"{Major}.{Minor}.{Patch}";
+            if (HasRevision && Revision != 0)
+            {
+                core = $"{core}.{Revision}";
+            }
+
             if (PreRelease.Length == 0)
             {
                 return core;
