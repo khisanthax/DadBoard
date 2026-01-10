@@ -2,6 +2,9 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
+using System.Net;
+using System.Net.Sockets;
+using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
@@ -67,13 +70,16 @@ public static class SetupOperations
             }
 
             progress?.Report("Fetching update manifest...");
-            var manifest = await LoadManifestAsync(resolvedManifestUrl, logger, cancellationToken).ConfigureAwait(false);
+            var fallbackManifestUrl = UpdateConfigStore.GetDefaultManifestUrl(UpdateConfigStore.Load().UpdateChannel);
+            var (manifest, manifestError, usedManifestUrl) =
+                await LoadManifestWithFallbackAsync(resolvedManifestUrl, fallbackManifestUrl, logger, cancellationToken)
+                    .ConfigureAwait(false);
             if (manifest == null || string.IsNullOrWhiteSpace(manifest.PackageUrl))
             {
                 return new SetupResult
                 {
                     Success = false,
-                    Error = "Invalid update manifest."
+                    Error = manifestError ?? "Invalid update manifest."
                 };
             }
 
@@ -107,7 +113,9 @@ public static class SetupOperations
 
             var config = UpdateConfigStore.Load();
             var defaultUrl = UpdateConfigStore.GetDefaultManifestUrl(config.UpdateChannel);
-            config.ManifestUrl = string.Equals(resolvedManifestUrl, defaultUrl, StringComparison.OrdinalIgnoreCase) ? "" : resolvedManifestUrl;
+            config.ManifestUrl = string.Equals(usedManifestUrl ?? resolvedManifestUrl, defaultUrl, StringComparison.OrdinalIgnoreCase)
+                ? ""
+                : usedManifestUrl ?? resolvedManifestUrl;
             config.Source = "github_mirror";
             config.MirrorEnabled = true;
             UpdateConfigStore.Save(config);
@@ -159,6 +167,203 @@ public static class SetupOperations
         response.EnsureSuccessStatusCode();
         json = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         return JsonSerializer.Deserialize<UpdateManifest>(json, JsonUtil.Options);
+    }
+
+    private static async Task<(UpdateManifest? Manifest, string? Error, string? UsedUrl)> LoadManifestWithFallbackAsync(
+        string primaryUrl,
+        string fallbackUrl,
+        SetupLogger logger,
+        CancellationToken ct)
+    {
+        if (!string.IsNullOrWhiteSpace(primaryUrl))
+        {
+            var (manifest, error) = await TryLoadManifestAsync(primaryUrl, logger, ct).ConfigureAwait(false);
+            if (manifest != null)
+            {
+                logger.Info($"Manifest loaded from {primaryUrl}");
+                return (manifest, null, primaryUrl);
+            }
+
+            logger.Warn($"Manifest fetch failed ({primaryUrl}): {error}");
+            if (IsLocalLeaderManifest(primaryUrl, out var host, out var port))
+            {
+                var leaderReady = await EnsureLeaderRunningAsync(host, port, logger, ct).ConfigureAwait(false);
+                if (leaderReady)
+                {
+                    var (retryManifest, retryError) = await TryLoadManifestAsync(primaryUrl, logger, ct).ConfigureAwait(false);
+                    if (retryManifest != null)
+                    {
+                        logger.Info("Manifest loaded after starting DadBoard.");
+                        return (retryManifest, null, primaryUrl);
+                    }
+
+                    logger.Warn($"Manifest retry failed: {retryError}");
+                }
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(fallbackUrl) &&
+            !string.Equals(primaryUrl, fallbackUrl, StringComparison.OrdinalIgnoreCase))
+        {
+            var (fallbackManifest, fallbackError) = await TryLoadManifestAsync(fallbackUrl, logger, ct).ConfigureAwait(false);
+            if (fallbackManifest != null)
+            {
+                logger.Info($"Manifest loaded from fallback {fallbackUrl}");
+                return (fallbackManifest, null, fallbackUrl);
+            }
+
+            logger.Warn($"Fallback manifest fetch failed ({fallbackUrl}): {fallbackError}");
+            return (null, fallbackError ?? "Fallback manifest unavailable.", null);
+        }
+
+        return (null, "Manifest unavailable.", null);
+    }
+
+    private static async Task<(UpdateManifest? Manifest, string? Error)> TryLoadManifestAsync(
+        string manifestUrl,
+        SetupLogger logger,
+        CancellationToken ct)
+    {
+        try
+        {
+            var manifest = await LoadManifestAsync(manifestUrl, logger, ct).ConfigureAwait(false);
+            return (manifest, null);
+        }
+        catch (Exception ex)
+        {
+            return (null, ex.Message);
+        }
+    }
+
+    private static bool IsLocalLeaderManifest(string manifestUrl, out string host, out int port)
+    {
+        host = "";
+        port = 0;
+        if (!Uri.TryCreate(manifestUrl, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        if (!string.Equals(uri.Scheme, "http", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(uri.Scheme, "https", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (!uri.AbsolutePath.EndsWith("/updates/latest.json", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        host = uri.Host;
+        port = uri.Port;
+        return IsLocalHost(host);
+    }
+
+    private static bool IsLocalHost(string host)
+    {
+        if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(host, "127.0.0.1", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        try
+        {
+            var hostEntry = Dns.GetHostEntry(Dns.GetHostName());
+            return hostEntry.AddressList.Any(ip => ip.AddressFamily == AddressFamily.InterNetwork &&
+                                                   string.Equals(ip.ToString(), host, StringComparison.OrdinalIgnoreCase));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static async Task<bool> EnsureLeaderRunningAsync(string host, int port, SetupLogger logger, CancellationToken ct)
+    {
+        if (await IsPortOpenAsync(host, port, ct).ConfigureAwait(false))
+        {
+            logger.Info($"Leader already listening on {host}:{port}");
+            return true;
+        }
+
+        var started = TryStartDadBoard(logger);
+        if (!started)
+        {
+            logger.Warn("Failed to start DadBoard; falling back to GitHub.");
+            return false;
+        }
+
+        logger.Info("Waiting for Leader to start...");
+        var deadline = DateTime.UtcNow.AddSeconds(8);
+        while (DateTime.UtcNow < deadline && !ct.IsCancellationRequested)
+        {
+            if (await IsPortOpenAsync(host, port, ct).ConfigureAwait(false))
+            {
+                logger.Info("Leader is now listening.");
+                return true;
+            }
+
+            await Task.Delay(500, ct).ConfigureAwait(false);
+        }
+
+        logger.Warn("Leader did not start within timeout.");
+        return false;
+    }
+
+    private static async Task<bool> IsPortOpenAsync(string host, int port, CancellationToken ct)
+    {
+        try
+        {
+            using var client = new TcpClient();
+            var connectTask = client.ConnectAsync(host, port);
+            var completed = await Task.WhenAny(connectTask, Task.Delay(500, ct)).ConfigureAwait(false);
+            if (completed != connectTask)
+            {
+                return false;
+            }
+
+            return client.Connected;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool TryStartDadBoard(SetupLogger logger)
+    {
+        var exePath = DadBoardPaths.InstalledExePath;
+        if (!File.Exists(exePath))
+        {
+            logger.Warn($"DadBoard.exe not found at {exePath}");
+            return false;
+        }
+
+        if (Process.GetProcessesByName("DadBoard").Length > 0)
+        {
+            logger.Info("DadBoard process already running.");
+            return true;
+        }
+
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = exePath,
+                WorkingDirectory = DadBoardPaths.InstallDir,
+                UseShellExecute = true
+            };
+            Process.Start(startInfo);
+            logger.Info("DadBoard started to bring up Leader mirror.");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            logger.Warn($"Failed to start DadBoard: {ex.Message}");
+            return false;
+        }
     }
 
     private static async Task DownloadPackageAsync(string packageUrl, string destination, SetupLogger logger, CancellationToken ct)
