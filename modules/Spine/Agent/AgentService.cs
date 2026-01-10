@@ -730,13 +730,27 @@ public sealed class AgentService : IDisposable
         SendUpdateStatus("downloading", "Starting updater.");
         _logger.Info($"Launching updater: {setupExe} /update --silent --manifest \"{manifestUrl}\"");
 
-        var startInfo = new ProcessStartInfo(setupExe, $"/update --silent --manifest \"{manifestUrl}\"")
+        var setupDir = Path.GetDirectoryName(setupExe) ?? DadBoardPaths.InstallDir;
+        Directory.CreateDirectory(setupDir);
+        var startInfo = new ProcessStartInfo
         {
+            FileName = setupExe,
+            Arguments = $"/update --silent --manifest \"{manifestUrl}\"",
             UseShellExecute = true,
-            WorkingDirectory = Path.GetDirectoryName(setupExe) ?? Environment.CurrentDirectory
+            WorkingDirectory = setupDir
         };
 
-        var process = Process.Start(startInfo);
+        Process? process;
+        try
+        {
+            process = Process.Start(startInfo);
+        }
+        catch (Exception ex)
+        {
+            SendUpdateStatus("failed", $"Failed to launch updater: {ex.Message}");
+            _logger.Error($"Updater start failed: {ex}");
+            return false;
+        }
         if (process == null)
         {
             SendUpdateStatus("failed", "Failed to launch updater.");
