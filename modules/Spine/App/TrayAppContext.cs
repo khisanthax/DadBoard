@@ -2,6 +2,7 @@
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Net.Http;
 using System.Threading;
 using System.Windows.Forms;
 using DadBoard.Agent;
@@ -31,12 +32,14 @@ sealed class TrayAppContext : ApplicationContext
     private readonly ToolStripMenuItem _openDashboardItem;
     private readonly ToolStripMenuItem _startLeaderOnLoginItem;
     private readonly ToolStripMenuItem _installItem;
+    private readonly ToolStripMenuItem _runSetupItem;
     private readonly ToolStripMenuItem _statusItem;
     private readonly ToolStripMenuItem _diagnosticsItem;
 
     private readonly AppLaunchOptions _options;
     private AgentConfig _config;
     private bool _disposed;
+    private readonly UpdateLogger _updateLogger = new();
 
     public TrayAppContext(AppLaunchOptions options)
     {
@@ -65,6 +68,7 @@ sealed class TrayAppContext : ApplicationContext
         _startLeaderOnLoginItem.CheckedChanged += (_, _) => ToggleStartLeaderOnLogin();
 
         _installItem = new ToolStripMenuItem("Install (Admin)", null, (_, _) => Install());
+        _runSetupItem = new ToolStripMenuItem("Update / Run Setup...", null, (_, _) => _ = RunSetupAsync());
         _statusItem = new ToolStripMenuItem("Show Status", null, (_, _) => ShowStatus());
         _diagnosticsItem = new ToolStripMenuItem("Diagnostics", null, (_, _) => ShowDiagnostics());
 
@@ -77,6 +81,7 @@ sealed class TrayAppContext : ApplicationContext
             new ToolStripSeparator(),
             _startLeaderOnLoginItem,
             _installItem,
+            _runSetupItem,
             _statusItem,
             _diagnosticsItem,
             new ToolStripSeparator(),
@@ -276,6 +281,196 @@ sealed class TrayAppContext : ApplicationContext
         var installed = Installer.IsInstalled();
         _installItem.Text = installed ? "Reinstall (Admin)" : "Install (Admin)";
         _installItem.Enabled = true;
+    }
+
+    private async System.Threading.Tasks.Task RunSetupAsync()
+    {
+        var setupPath = DadBoardPaths.SetupExePath;
+        var installDir = DadBoardPaths.InstallDir;
+        try
+        {
+            Directory.CreateDirectory(installDir);
+            if (!File.Exists(setupPath))
+            {
+                var result = MessageBox.Show(
+                    $"DadBoardSetup.exe not found at:{Environment.NewLine}{setupPath}{Environment.NewLine}{Environment.NewLine}Download updater now?",
+                    "DadBoard",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question);
+                if (result != DialogResult.Yes)
+                {
+                    return;
+                }
+
+                var ok = await DownloadSetupAsync(setupPath).ConfigureAwait(true);
+                if (!ok)
+                {
+                    return;
+                }
+            }
+
+            if (!TryLaunchSetup(setupPath, installDir, out var error))
+            {
+                MessageBox.Show(
+                    $"Failed to launch updater: {error}",
+                    "DadBoard",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            _updateLogger.Error($"RunSetup failed: {ex}");
+            MessageBox.Show(
+                $"Failed to run updater: {ex.Message}",
+                "DadBoard",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+        }
+    }
+
+    private bool TryLaunchSetup(string setupPath, string installDir, out string error)
+    {
+        error = "";
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = setupPath,
+                WorkingDirectory = installDir,
+                UseShellExecute = true
+            };
+
+            var process = Process.Start(startInfo);
+            if (process == null)
+            {
+                error = "Process failed to start.";
+                _updateLogger.Warn($"Setup start returned null for {setupPath}");
+                return false;
+            }
+
+            _updateLogger.Info($"Launched setup: {setupPath}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            _updateLogger.Error($"Setup start failed: {ex}");
+            return false;
+        }
+    }
+
+    private async System.Threading.Tasks.Task<bool> DownloadSetupAsync(string setupPath)
+    {
+        var (primaryUrl, fallbackUrl, localPath) = ResolveSetupDownloadSources();
+        if (!string.IsNullOrWhiteSpace(localPath) && File.Exists(localPath))
+        {
+            try
+            {
+                File.Copy(localPath, setupPath, true);
+                _updateLogger.Info($"Copied setup from {localPath}");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _updateLogger.Warn($"Setup copy failed: {ex.Message}");
+            }
+        }
+
+        using var client = new HttpClient
+        {
+            Timeout = TimeSpan.FromSeconds(15)
+        };
+
+        string? lastError = null;
+        foreach (var url in new[] { primaryUrl, fallbackUrl })
+        {
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                continue;
+            }
+
+            try
+            {
+                _updateLogger.Info($"Downloading setup: {url}");
+                var bytes = await client.GetByteArrayAsync(url).ConfigureAwait(true);
+                await File.WriteAllBytesAsync(setupPath, bytes).ConfigureAwait(true);
+                _updateLogger.Info($"Setup downloaded to {setupPath}");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                lastError = ex.Message;
+                _updateLogger.Warn($"Setup download failed from {url}: {ex.Message}");
+            }
+        }
+
+        MessageBox.Show(
+            $"Failed to download DadBoardSetup.exe.{Environment.NewLine}{lastError ?? "No update source configured."}",
+            "DadBoard",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Error);
+        return false;
+    }
+
+    private (string PrimaryUrl, string FallbackUrl, string LocalPath) ResolveSetupDownloadSources()
+    {
+        var manifestUrl = "";
+        if (_leader != null)
+        {
+            var snapshot = _leader.GetUpdateMirrorSnapshot();
+            manifestUrl = snapshot.LocalHostUrl;
+        }
+
+        var config = UpdateConfigStore.Load();
+        var fallbackManifest = UpdateConfigStore.ResolveManifestUrl(config);
+
+        var primaryUrl = BuildSetupUrlFromManifest(manifestUrl);
+        var fallbackUrl = BuildSetupUrlFromManifest(fallbackManifest);
+
+        var localPath = "";
+        var manifestPath = ResolveLocalManifestPath(manifestUrl);
+        if (!string.IsNullOrWhiteSpace(manifestPath))
+        {
+            localPath = Path.Combine(Path.GetDirectoryName(manifestPath) ?? "", "DadBoardSetup.exe");
+        }
+
+        return (primaryUrl, fallbackUrl, localPath);
+    }
+
+    private static string BuildSetupUrlFromManifest(string manifestUrl)
+    {
+        if (string.IsNullOrWhiteSpace(manifestUrl))
+        {
+            return "";
+        }
+
+        if (manifestUrl.EndsWith("latest.json", StringComparison.OrdinalIgnoreCase))
+        {
+            return manifestUrl.Substring(0, manifestUrl.Length - "latest.json".Length) + "DadBoardSetup.exe";
+        }
+
+        return "";
+    }
+
+    private static string ResolveLocalManifestPath(string manifestUrl)
+    {
+        if (string.IsNullOrWhiteSpace(manifestUrl))
+        {
+            return "";
+        }
+
+        if (File.Exists(manifestUrl))
+        {
+            return manifestUrl;
+        }
+
+        if (Uri.TryCreate(manifestUrl, UriKind.Absolute, out var uri) && uri.IsFile)
+        {
+            return uri.LocalPath;
+        }
+
+        return "";
     }
 
     private void Exit()
