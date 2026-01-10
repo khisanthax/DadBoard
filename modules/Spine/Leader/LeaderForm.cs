@@ -187,6 +187,7 @@ public sealed class LeaderForm : Form
         _updateAllButton.Height = 32;
         _updateAllButton.Enabled = true;
         _updateAllButton.Click += (_, _) => UpdateAllAgents();
+        _toolTip.SetToolTip(_updateAllButton, "Send update command to all online PCs");
 
         actions.Controls.AddRange(new Control[]
         {
