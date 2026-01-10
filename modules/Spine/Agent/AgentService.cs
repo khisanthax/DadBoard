@@ -689,12 +689,12 @@ public sealed class AgentService : IDisposable
             return _updateState.ManifestUrl;
         }
 
-        if (_updateConfigLoaded && !string.IsNullOrWhiteSpace(_updateConfig.ManifestUrl))
+        if (_updateConfigLoaded)
         {
-            return _updateConfig.ManifestUrl;
+            return UpdateConfigStore.ResolveManifestUrl(_updateConfig);
         }
 
-        return "";
+        return UpdateConfigStore.GetDefaultManifestUrl(UpdateChannel.Nightly);
     }
 
     private string GetFallbackManifestUrl(string primaryUrl)
@@ -705,11 +705,13 @@ public sealed class AgentService : IDisposable
             return _updateState.FallbackManifestUrl;
         }
 
-        if (_updateConfigLoaded &&
-            !string.IsNullOrWhiteSpace(_updateConfig.ManifestUrl) &&
-            !string.Equals(_updateConfig.ManifestUrl, primaryUrl, StringComparison.OrdinalIgnoreCase))
+        if (_updateConfigLoaded)
         {
-            return _updateConfig.ManifestUrl;
+            var fallback = UpdateConfigStore.ResolveManifestUrl(_updateConfig);
+            if (!string.Equals(fallback, primaryUrl, StringComparison.OrdinalIgnoreCase))
+            {
+                return fallback;
+            }
         }
 
         return "";
@@ -792,7 +794,7 @@ public sealed class AgentService : IDisposable
                     var resolved = UpdateConfigStore.ResolveManifestUrl(_updateConfig);
                     _updateState.ManifestUrl = resolved;
                     UpdateStateStore.Save(_updateState);
-                    var sourceLabel = UpdateConfigStore.IsDefaultManifestUrl(_updateConfig.ManifestUrl) ? "default" : "override";
+                    var sourceLabel = UpdateConfigStore.IsDefaultManifestUrl(_updateConfig) ? "default" : "override";
                     _logger.Info($"Update init: manifest source set to {resolved} ({sourceLabel})");
                 }
                 _updateConfigLoaded = true;

@@ -105,9 +105,10 @@ public static class SetupOperations
             ApplyPackage(packageFile, logger);
 
             var config = UpdateConfigStore.Load();
-            config.ManifestUrl = resolvedManifestUrl;
-            config.Source = string.IsNullOrWhiteSpace(resolvedManifestUrl) ? "" : "github_mirror";
-            config.MirrorEnabled = !string.IsNullOrWhiteSpace(resolvedManifestUrl);
+            var defaultUrl = UpdateConfigStore.GetDefaultManifestUrl(config.UpdateChannel);
+            config.ManifestUrl = string.Equals(resolvedManifestUrl, defaultUrl, StringComparison.OrdinalIgnoreCase) ? "" : resolvedManifestUrl;
+            config.Source = "github_mirror";
+            config.MirrorEnabled = true;
             UpdateConfigStore.Save(config);
 
             progress?.Report("Install complete.");

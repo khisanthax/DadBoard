@@ -21,6 +21,7 @@ public sealed class DiagnosticsForm : Form
     private readonly TextBox _runningPath = new();
     private readonly TextBox _expectedPath = new();
     private readonly TextBox _version = new();
+    private readonly TextBox _updateChannel = new();
     private readonly TextBox _updateSource = new();
     private readonly TextBox _logsPath = new();
     private readonly TextBox _updateError = new();
@@ -55,9 +56,11 @@ public sealed class DiagnosticsForm : Form
 
         _layout.Dock = DockStyle.Fill;
         _layout.ColumnCount = 2;
-        _layout.RowCount = 16;
+        _layout.RowCount = 17;
         _layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
         _layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -88,16 +91,17 @@ public sealed class DiagnosticsForm : Form
         AddRow("Running exe", _runningPath, 1);
         AddRow("Expected install", _expectedPath, 2);
         AddRow("App version", _version, 3);
-        AddRow("Update source", _updateSource, 4);
-        AddRow("Update source error", _updateError, 5);
-        AddRow("Advanced / Override manifest URL", BuildManifestEditor(), 6);
-        AddRow("Mirror status", _mirrorStatus, 7);
-        AddRow("Mirror host URL", _mirrorHostUrl, 8);
-        AddRow("Last manifest fetch", _mirrorLastManifest, 9);
-        AddRow("Last zip download", _mirrorLastDownload, 10);
-        AddRow("Cached versions", _mirrorCached, 11);
-        AddRow("Logs folder", _logsPath, 12);
-        AddRow("Update self-test", BuildSelfTestPanel(), 13);
+        AddRow("Update channel", _updateChannel, 4);
+        AddRow("Update source", _updateSource, 5);
+        AddRow("Update source error", _updateError, 6);
+        AddRow("Advanced / Override manifest URL", BuildManifestEditor(), 7);
+        AddRow("Mirror status", _mirrorStatus, 8);
+        AddRow("Mirror host URL", _mirrorHostUrl, 9);
+        AddRow("Last manifest fetch", _mirrorLastManifest, 10);
+        AddRow("Last zip download", _mirrorLastDownload, 11);
+        AddRow("Cached versions", _mirrorCached, 12);
+        AddRow("Logs folder", _logsPath, 13);
+        AddRow("Update self-test", BuildSelfTestPanel(), 14);
 
         var agentLabel = new Label
         {
@@ -105,7 +109,7 @@ public sealed class DiagnosticsForm : Form
             TextAlign = ContentAlignment.MiddleLeft,
             Dock = DockStyle.Fill
         };
-        _layout.Controls.Add(agentLabel, 0, 14);
+        _layout.Controls.Add(agentLabel, 0, 15);
 
         _agentVersions.View = View.Details;
         _agentVersions.FullRowSelect = true;
@@ -113,7 +117,7 @@ public sealed class DiagnosticsForm : Form
         _agentVersions.Columns.Add("PC", 200);
         _agentVersions.Columns.Add("Version", 120);
         _agentVersions.Dock = DockStyle.Fill;
-        _layout.Controls.Add(_agentVersions, 1, 14);
+        _layout.Controls.Add(_agentVersions, 1, 15);
 
         var buttonPanel = new FlowLayoutPanel
         {
@@ -140,7 +144,7 @@ public sealed class DiagnosticsForm : Form
         buttonPanel.Controls.Add(_launchInstalledButton);
 
         _layout.Controls.Add(_devWarning, 0, 0);
-        _layout.Controls.Add(buttonPanel, 0, 15);
+        _layout.Controls.Add(buttonPanel, 0, 16);
         _layout.SetColumnSpan(buttonPanel, 2);
 
         Controls.Add(_layout);
@@ -155,6 +159,7 @@ public sealed class DiagnosticsForm : Form
         _runningPath.Text = runningPath;
         _expectedPath.Text = DadBoardPaths.InstalledExePath;
         _version.Text = VersionUtil.GetCurrentVersion();
+        _updateChannel.Text = "Loading...";
         _updateSource.Text = "Loading...";
         _updateError.Text = "";
         _logsPath.Text = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DadBoard", "logs");
@@ -366,13 +371,14 @@ public sealed class DiagnosticsForm : Form
             var source = config?.ManifestUrl ?? "";
             _manifestUrlInput.Text = string.IsNullOrWhiteSpace(source) ? resolved : source;
             _localHostIpInput.Text = config?.LocalHostIp ?? "";
+            _updateChannel.Text = config == null ? "-" : config.UpdateChannel.ToString();
             if (string.IsNullOrWhiteSpace(resolved))
             {
                 _updateSource.Text = "Not configured";
             }
             else
             {
-                var label = UpdateConfigStore.IsDefaultManifestUrl(source) ? "Default" : "Override";
+                var label = config != null && UpdateConfigStore.IsDefaultManifestUrl(config) ? "Default" : "Override";
                 _updateSource.Text = $"{label}: {resolved}";
             }
 
@@ -422,6 +428,7 @@ public sealed class DiagnosticsForm : Form
         sb.AppendLine($"Running exe: {_runningPath.Text}");
         sb.AppendLine($"Expected install: {_expectedPath.Text}");
         sb.AppendLine($"Version: {_version.Text}");
+        sb.AppendLine($"Update channel: {_updateChannel.Text}");
         sb.AppendLine($"Update source: {_updateSource.Text}");
         sb.AppendLine($"Update source error: {_updateError.Text}");
         sb.AppendLine($"Mirror status: {_mirrorStatus.Text}");
@@ -451,14 +458,15 @@ public sealed class DiagnosticsForm : Form
         var url = _manifestUrlInput.Text.Trim();
         var ipOverride = _localHostIpInput.Text.Trim();
         var config = UpdateConfigStore.Load();
-        config.ManifestUrl = url;
+        var defaultUrl = UpdateConfigStore.GetDefaultManifestUrl(config.UpdateChannel);
+        config.ManifestUrl = string.Equals(url, defaultUrl, StringComparison.OrdinalIgnoreCase) ? "" : url;
         config.LocalHostIp = ipOverride;
-        config.Source = string.IsNullOrWhiteSpace(url) ? "" : "github_mirror";
-        config.MirrorEnabled = !string.IsNullOrWhiteSpace(url);
+        config.Source = "github_mirror";
+        config.MirrorEnabled = true;
         UpdateConfigStore.Save(config);
         _leader?.ReloadUpdateConfig();
         var resolved = UpdateConfigStore.ResolveManifestUrl(config);
-        var label = UpdateConfigStore.IsDefaultManifestUrl(url) ? "Default" : "Override";
+        var label = UpdateConfigStore.IsDefaultManifestUrl(config) ? "Default" : "Override";
         _updateSource.Text = string.IsNullOrWhiteSpace(resolved) ? "Not configured" : $"{label}: {resolved}";
         _updateError.Text = "None";
         UpdateMirrorDetails();
@@ -467,15 +475,15 @@ public sealed class DiagnosticsForm : Form
     private void ResetManifestUrl()
     {
         var config = UpdateConfigStore.Load();
-        config.ManifestUrl = UpdateConfigStore.DefaultManifestUrl;
+        config.ManifestUrl = "";
         config.Source = "github_mirror";
         config.MirrorEnabled = true;
         config.LocalHostIp = "";
         UpdateConfigStore.Save(config);
-        _manifestUrlInput.Text = config.ManifestUrl;
+        _manifestUrlInput.Text = UpdateConfigStore.ResolveManifestUrl(config);
         _localHostIpInput.Text = config.LocalHostIp;
         _leader?.ReloadUpdateConfig();
-        _updateSource.Text = $"Default: {config.ManifestUrl}";
+        _updateSource.Text = $"Default: {UpdateConfigStore.ResolveManifestUrl(config)}";
         _updateError.Text = "None";
         UpdateMirrorDetails();
     }
@@ -505,8 +513,8 @@ public sealed class DiagnosticsForm : Form
             var config = await Task.Run(UpdateConfigStore.Load).ConfigureAwait(true);
             var (hostUrl, reason) = _leader.GetLocalUpdateHostUrlWithReason();
             var resolved = UpdateConfigStore.ResolveManifestUrl(config);
-            var sourceLabel = UpdateConfigStore.IsDefaultManifestUrl(config.ManifestUrl) ? "default" : "override";
-            AppendSelfTest($"Config source={config.Source} manifest_url={resolved} ({sourceLabel})");
+            var sourceLabel = UpdateConfigStore.IsDefaultManifestUrl(config) ? "default" : "override";
+            AppendSelfTest($"Config source={config.Source} channel={config.UpdateChannel} manifest_url={resolved} ({sourceLabel})");
             AppendSelfTest($"mirror_enabled={config.MirrorEnabled} poll_minutes={config.MirrorPollMinutes} local_host={hostUrl} ({reason})");
 
             AppendSelfTest("Step B: Fetching GitHub manifest...");

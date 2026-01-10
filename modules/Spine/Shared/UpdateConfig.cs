@@ -10,6 +10,9 @@ public sealed class UpdateConfig
     [JsonPropertyName("manifest_url")]
     public string ManifestUrl { get; set; } = "";
 
+    [JsonPropertyName("update_channel")]
+    public UpdateChannel UpdateChannel { get; set; } = UpdateChannel.Nightly;
+
     [JsonPropertyName("mirror_enabled")]
     public bool MirrorEnabled { get; set; }
 

@@ -23,6 +23,7 @@ public sealed class SetupForm : Form
     private readonly FlowLayoutPanel _finalPanel = new();
     private readonly TextBox _manifestUrlInput = new();
     private readonly TextBox _localHostIpInput = new();
+    private readonly ComboBox _channelCombo = new();
     private readonly Button _saveUpdateConfigButton = new();
     private readonly Button _resetUpdateConfigButton = new();
     private readonly Label _updateStatusLabel = new();
@@ -168,7 +169,7 @@ public sealed class SetupForm : Form
             AppendLog(message);
         });
 
-        var manifestUrl = UpdateConfigStore.Load().ManifestUrl;
+        var manifestUrl = UpdateConfigStore.ResolveManifestUrl(UpdateConfigStore.Load());
         var result = await SetupOperations.RunAsync(action, manifestUrl, _logger, progress, _cts.Token);
 
         if (result.Success)
@@ -295,6 +296,13 @@ public sealed class SetupForm : Form
             AutoSize = true
         };
 
+        var channelLabel = new Label
+        {
+            Text = "Update Channel",
+            AutoSize = true,
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+
         var manifestLabel = new Label
         {
             Text = "Manifest URL",
@@ -309,6 +317,11 @@ public sealed class SetupForm : Form
             TextAlign = ContentAlignment.MiddleLeft
         };
 
+        _channelCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+        _channelCombo.Items.Add("Nightly (recommended for development)");
+        _channelCombo.Items.Add("Stable");
+        _channelCombo.Width = 220;
+
         _manifestUrlInput.Width = 420;
         _localHostIpInput.Width = 140;
         _saveUpdateConfigButton.Text = "Save";
@@ -321,6 +334,8 @@ public sealed class SetupForm : Form
         _updateStatusLabel.AutoSize = true;
         _updateStatusLabel.Text = "Not configured";
 
+        panel.Controls.Add(channelLabel);
+        panel.Controls.Add(_channelCombo);
         panel.Controls.Add(manifestLabel);
         panel.Controls.Add(_manifestUrlInput);
         panel.Controls.Add(hostLabel);
@@ -335,6 +350,7 @@ public sealed class SetupForm : Form
     private void LoadUpdateConfigUi()
     {
         var config = UpdateConfigStore.Load();
+        _channelCombo.SelectedIndex = config.UpdateChannel == UpdateChannel.Stable ? 1 : 0;
         _manifestUrlInput.Text = UpdateConfigStore.ResolveManifestUrl(config);
         _localHostIpInput.Text = config.LocalHostIp;
         _updateStatusLabel.Text = GetUpdateSourceStatus(config);
@@ -345,24 +361,27 @@ public sealed class SetupForm : Form
         var url = _manifestUrlInput.Text.Trim();
         var hostIp = _localHostIpInput.Text.Trim();
         var config = UpdateConfigStore.Load();
-        config.ManifestUrl = url;
+        config.UpdateChannel = _channelCombo.SelectedIndex == 1 ? UpdateChannel.Stable : UpdateChannel.Nightly;
+        var defaultUrl = UpdateConfigStore.GetDefaultManifestUrl(config.UpdateChannel);
+        config.ManifestUrl = string.Equals(url, defaultUrl, StringComparison.OrdinalIgnoreCase) ? "" : url;
         config.LocalHostIp = hostIp;
-        config.Source = string.IsNullOrWhiteSpace(url) ? "" : "github_mirror";
-        config.MirrorEnabled = !string.IsNullOrWhiteSpace(url);
+        config.Source = "github_mirror";
+        config.MirrorEnabled = true;
         UpdateConfigStore.Save(config);
         _updateStatusLabel.Text = GetUpdateSourceStatus(config);
-        AppendLog($"Update source saved: {config.ManifestUrl}");
+        AppendLog($"Update source saved: {UpdateConfigStore.ResolveManifestUrl(config)}");
     }
 
     private void ResetUpdateConfig()
     {
         var config = UpdateConfigStore.Load();
-        config.ManifestUrl = UpdateConfigStore.DefaultManifestUrl;
+        config.UpdateChannel = _channelCombo.SelectedIndex == 1 ? UpdateChannel.Stable : UpdateChannel.Nightly;
+        config.ManifestUrl = "";
         config.LocalHostIp = "";
         config.Source = "github_mirror";
         config.MirrorEnabled = true;
         UpdateConfigStore.Save(config);
-        _manifestUrlInput.Text = config.ManifestUrl;
+        _manifestUrlInput.Text = UpdateConfigStore.ResolveManifestUrl(config);
         _localHostIpInput.Text = config.LocalHostIp;
         _updateStatusLabel.Text = GetUpdateSourceStatus(config);
         AppendLog("Update source reset to default.");

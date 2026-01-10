@@ -137,7 +137,7 @@ public sealed class LeaderService : IDisposable
         return new UpdateMirrorSnapshot
         {
             Enabled = _updateConfig.MirrorEnabled && string.Equals(_updateConfig.Source, "github_mirror", StringComparison.OrdinalIgnoreCase),
-            ManifestUrl = _updateConfig.ManifestUrl,
+            ManifestUrl = UpdateConfigStore.ResolveManifestUrl(_updateConfig),
             LocalHostUrl = _mirrorLocalHostUrl,
             LastManifestFetchUtc = _mirrorLastManifestFetchUtc == default ? "" : _mirrorLastManifestFetchUtc.ToString("O"),
             LastManifestResult = _mirrorLastManifestResult,
@@ -163,7 +163,7 @@ public sealed class LeaderService : IDisposable
             _mirrorDisabled = false;
             _mirrorFailures = 0;
             var resolved = UpdateConfigStore.ResolveManifestUrl(_updateConfig);
-            var sourceLabel = UpdateConfigStore.IsDefaultManifestUrl(_updateConfig.ManifestUrl) ? "default" : "override";
+            var sourceLabel = UpdateConfigStore.IsDefaultManifestUrl(_updateConfig) ? "default" : "override";
             _logger.Info($"Update mirror: config reloaded source={_updateConfig.Source} manifest={resolved} ({sourceLabel})");
 
             if (IsMirrorEnabled())
@@ -536,7 +536,7 @@ public sealed class LeaderService : IDisposable
             _updateConfig = await Task.Run(UpdateConfigStore.Load).ConfigureAwait(false);
             _updateConfigLoaded = true;
             var resolved = UpdateConfigStore.ResolveManifestUrl(_updateConfig);
-            var sourceLabel = UpdateConfigStore.IsDefaultManifestUrl(_updateConfig.ManifestUrl) ? "default" : "override";
+            var sourceLabel = UpdateConfigStore.IsDefaultManifestUrl(_updateConfig) ? "default" : "override";
             _logger.Info($"Update mirror: source={_updateConfig.Source} manifest={resolved} ({sourceLabel})");
 
             if (IsMirrorEnabled())
@@ -555,7 +555,7 @@ public sealed class LeaderService : IDisposable
     {
         return _updateConfig.MirrorEnabled &&
                string.Equals(_updateConfig.Source, "github_mirror", StringComparison.OrdinalIgnoreCase) &&
-               !string.IsNullOrWhiteSpace(_updateConfig.ManifestUrl);
+               !string.IsNullOrWhiteSpace(UpdateConfigStore.ResolveManifestUrl(_updateConfig));
     }
 
     private void StartMirrorTimer()
@@ -575,7 +575,7 @@ public sealed class LeaderService : IDisposable
 
         lock (_mirrorLock)
         {
-            _mirrorManifestUrl = _updateConfig.ManifestUrl;
+            _mirrorManifestUrl = UpdateConfigStore.ResolveManifestUrl(_updateConfig);
         }
 
         try
@@ -1513,7 +1513,7 @@ public sealed class LeaderService : IDisposable
             return local;
         }
 
-        return _updateConfig.ManifestUrl;
+        return UpdateConfigStore.ResolveManifestUrl(_updateConfig);
     }
 
     private string GetLocalManifestUrl(AgentInfo agent)
@@ -1738,7 +1738,7 @@ public sealed class LeaderService : IDisposable
         var payload = new UpdateSourcePayload
         {
             PrimaryManifestUrl = manifestUrl,
-            FallbackManifestUrl = _updateConfig.ManifestUrl
+            FallbackManifestUrl = UpdateConfigStore.ResolveManifestUrl(_updateConfig)
         };
 
         var envelope = new

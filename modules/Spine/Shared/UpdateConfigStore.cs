@@ -6,8 +6,16 @@ namespace DadBoard.Spine.Shared;
 
 public static class UpdateConfigStore
 {
-    public static string DefaultManifestUrl =>
+    public static string DefaultStableManifestUrl =>
         "https://github.com/khisanthax/DadBoard/releases/latest/download/latest.json";
+
+    public static string DefaultNightlyManifestUrl =>
+        "https://github.com/khisanthax/DadBoard/releases/download/nightly/latest.json";
+
+    public static UpdateChannel DefaultChannel => UpdateChannel.Nightly;
+
+    public static string GetDefaultManifestUrl(UpdateChannel channel)
+        => channel == UpdateChannel.Stable ? DefaultStableManifestUrl : DefaultNightlyManifestUrl;
 
     public static string ResolveManifestUrl(UpdateConfig config)
     {
@@ -16,17 +24,18 @@ public static class UpdateConfigStore
             return config.ManifestUrl;
         }
 
-        return DefaultManifestUrl;
+        return GetDefaultManifestUrl(config.UpdateChannel);
     }
 
-    public static bool IsDefaultManifestUrl(string? url)
+    public static bool IsDefaultManifestUrl(UpdateConfig config)
     {
-        if (string.IsNullOrWhiteSpace(url))
+        if (string.IsNullOrWhiteSpace(config.ManifestUrl))
         {
             return true;
         }
 
-        return string.Equals(url.Trim(), DefaultManifestUrl, StringComparison.OrdinalIgnoreCase);
+        var defaultUrl = GetDefaultManifestUrl(config.UpdateChannel);
+        return string.Equals(config.ManifestUrl.Trim(), defaultUrl, StringComparison.OrdinalIgnoreCase);
     }
 
     public static string GetConfigPath()
@@ -65,9 +74,9 @@ public static class UpdateConfigStore
 
     private static UpdateConfig Normalize(UpdateConfig config)
     {
-        if (string.IsNullOrWhiteSpace(config.ManifestUrl))
+        if (!Enum.IsDefined(typeof(UpdateChannel), config.UpdateChannel))
         {
-            config.ManifestUrl = DefaultManifestUrl;
+            config.UpdateChannel = DefaultChannel;
         }
 
         if (config.MirrorPollMinutes <= 0)
@@ -85,7 +94,7 @@ public static class UpdateConfigStore
             config.Source = "github_mirror";
         }
 
-        if (string.IsNullOrWhiteSpace(config.ManifestUrl) == false)
+        if (!config.MirrorEnabled)
         {
             config.MirrorEnabled = true;
         }
