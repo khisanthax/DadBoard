@@ -51,6 +51,10 @@ Write-Host "[7/7] NEXT ACTION:"
 Write-Host "Run DadBoard.exe, open Diagnostics, set channel Stable and manifest to $Manifest11, confirm Available 0.1.1, then click Update."
 ```
 
+## Official install path + single-file onboarding
+- Install location: `%LOCALAPPDATA%\Programs\DadBoard`
+- DadBoardSetup.exe installs DadBoard.exe and copies itself into the install dir as `DadBoardSetup.exe` so updates always have the updater present.
+
 ## Baseline note
 Releases prior to v0.1.0.1 may contain binaries stamped as 1.0.0+<sha>, which breaks semver update ordering. Use v0.1.0.1 as the first correct-by-default baseline.
 

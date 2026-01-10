@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Net.Http;
@@ -207,6 +208,7 @@ public static class SetupOperations
         }
 
         CopyDirectory(stagingDir, DadBoardPaths.InstallDir);
+        CopySetupIntoInstallDir(logger);
 
         try
         {
@@ -274,6 +276,34 @@ public static class SetupOperations
             var targetPath = file.Replace(sourceDir, destinationDir, StringComparison.OrdinalIgnoreCase);
             Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
             File.Copy(file, targetPath, true);
+        }
+    }
+
+    private static void CopySetupIntoInstallDir(SetupLogger logger)
+    {
+        try
+        {
+            var setupSource = Process.GetCurrentProcess().MainModule?.FileName ?? "";
+            if (string.IsNullOrWhiteSpace(setupSource) || !File.Exists(setupSource))
+            {
+                logger.Warn("Setup copy skipped: current process path unavailable.");
+                return;
+            }
+
+            var setupDest = DadBoardPaths.SetupExePath;
+            if (string.Equals(Path.GetFullPath(setupSource), Path.GetFullPath(setupDest), StringComparison.OrdinalIgnoreCase))
+            {
+                logger.Info("Setup already in install dir.");
+                return;
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(setupDest)!);
+            File.Copy(setupSource, setupDest, true);
+            logger.Info($"Copied setup into install dir: {setupDest}");
+        }
+        catch (Exception ex)
+        {
+            logger.Warn($"Failed to copy setup into install dir: {ex.Message}");
         }
     }
 
