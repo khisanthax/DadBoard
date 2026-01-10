@@ -62,6 +62,7 @@ public sealed class LeaderService : IDisposable
     private Task? _updateHostTask;
     private readonly HttpClient _updateHttp = new();
     private UpdateConfig _updateConfig = new();
+    private readonly TimeSpan _updateGracePeriod = TimeSpan.FromMinutes(3);
     private Timer? _mirrorTimer;
     private readonly object _mirrorLock = new();
     private bool _mirrorDisabled;
@@ -412,12 +413,15 @@ public sealed class LeaderService : IDisposable
             return false;
         }
 
+        _logger.Info($"Update requested (single) pcId={agent.PcId} ip={agent.Ip}");
         _ = Task.Run(() => SendUpdateSelf(agent));
         return true;
     }
 
     public void SendUpdateAllOnline()
     {
+        var targets = _agents.Values.Where(a => a.Online).ToList();
+        _logger.Info($"Update requested (all online) targets={targets.Count} pcIds=[{string.Join(",", targets.Select(t => t.PcId))}]");
         foreach (var agent in _agents.Values)
         {
             if (!agent.Online)
@@ -1007,6 +1011,8 @@ public sealed class LeaderService : IDisposable
         agent.LastSeen = DateTime.UtcNow;
         agent.Online = true;
 
+        EvaluateUpdateCompletion(agent);
+
         if (!_agentInventories.ContainsKey(agent.PcId))
         {
             var lastScan = _lastInventoryScan.GetOrAdd(agent.PcId, _ => DateTime.MinValue);
@@ -1025,7 +1031,19 @@ public sealed class LeaderService : IDisposable
         {
             if ((now - agent.LastSeen).TotalSeconds > _config.OnlineTimeoutSec)
             {
-                agent.Online = false;
+                if (agent.Online)
+                {
+                    agent.Online = false;
+                    if (agent.UpdateInProgress)
+                    {
+                        MarkUpdateRestarting(agent, "Agent went offline during update.");
+                    }
+                }
+            }
+
+            if (agent.UpdateInProgress && now > agent.UpdateGraceUntilUtc && !agent.Online)
+            {
+                MarkUpdateFailed(agent, "Update timed out waiting for restart.");
             }
         }
     }
@@ -1448,9 +1466,9 @@ public sealed class LeaderService : IDisposable
         var connection = await EnsureConnection(agent).ConfigureAwait(false);
         if (connection == null || connection.Socket.State != WebSocketState.Open)
         {
-            agent.UpdateStatus = "failed";
-            agent.UpdateMessage = connection?.LastError ?? "Unable to connect";
-            _logger.Warn($"Update command skipped for {agent.Name}: {agent.UpdateMessage}");
+            var message = connection?.LastError ?? "Unable to connect";
+            MarkUpdateFailed(agent, message);
+            _logger.Warn($"Update command skipped for {agent.Name}: {message}");
             return;
         }
 
@@ -1473,8 +1491,7 @@ public sealed class LeaderService : IDisposable
         var json = JsonSerializer.Serialize(envelope, JsonUtil.Options);
         var buffer = Encoding.UTF8.GetBytes(json);
 
-        agent.UpdateStatus = "sent";
-        agent.UpdateMessage = $"Update requested via {manifestUrl}";
+        MarkUpdateRequested(agent, manifestUrl);
         _logger.Info($"Sending TriggerUpdateNow to pcId={agent.PcId} ip={agent.Ip} ws={agent.WsPort} manifest={manifestUrl} corr={correlationId}");
 
         try
@@ -1483,8 +1500,7 @@ public sealed class LeaderService : IDisposable
         }
         catch (Exception ex)
         {
-            agent.UpdateStatus = "failed";
-            agent.UpdateMessage = ex.Message;
+            MarkUpdateFailed(agent, $"Send failed: {ex.Message}");
             _logger.Warn($"TriggerUpdateNow send failed for {agent.Name}: {ex.Message}");
         }
     }
@@ -1509,6 +1525,195 @@ public sealed class LeaderService : IDisposable
         }
 
         return $"{GetUpdateBaseUrl(agent)}/updates/latest.json";
+    }
+
+    private void MarkUpdateRequested(AgentInfo agent, string manifestUrl)
+    {
+        agent.UpdateRequestedUtc = DateTime.UtcNow;
+        agent.UpdateStartedUtc = default;
+        agent.UpdateGraceUntilUtc = DateTime.UtcNow.Add(_updateGracePeriod);
+        agent.UpdatePreviousVersion = agent.Version ?? "";
+        agent.UpdateExpectedVersion = ResolveExpectedVersion(manifestUrl);
+        agent.UpdateStatus = "requested";
+        agent.UpdateMessage = $"Update requested via {manifestUrl}";
+        agent.UpdateInProgress = true;
+        agent.LastResult = "Updating";
+        agent.LastError = "None";
+        _logger.Info($"Update requested pcId={agent.PcId} current={agent.UpdatePreviousVersion} expected={agent.UpdateExpectedVersion}");
+    }
+
+    private void MarkUpdateRestarting(AgentInfo agent, string message)
+    {
+        agent.UpdateStatus = "restarting";
+        agent.UpdateMessage = message;
+        agent.UpdateInProgress = true;
+        agent.UpdateGraceUntilUtc = DateTime.UtcNow.Add(_updateGracePeriod);
+        agent.LastResult = "Restarting";
+        agent.LastError = "None";
+        _logger.Info($"Update restarting pcId={agent.PcId} message={message}");
+    }
+
+    private void MarkUpdateSuccess(AgentInfo agent, string? message = null)
+    {
+        agent.UpdateStatus = "updated";
+        agent.UpdateMessage = message ?? $"Updated to {agent.Version}";
+        agent.UpdateInProgress = false;
+        agent.LastResult = "Updated";
+        agent.LastError = "None";
+        _logger.Info($"Update success pcId={agent.PcId} version={agent.Version}");
+    }
+
+    private void MarkUpdateFailed(AgentInfo agent, string message)
+    {
+        agent.UpdateStatus = "failed";
+        agent.UpdateMessage = message;
+        agent.UpdateInProgress = false;
+        agent.LastResult = "Failed";
+        agent.LastError = string.IsNullOrWhiteSpace(message) ? "Update failed." : message;
+        _logger.Warn($"Update failed pcId={agent.PcId} error={agent.LastError}");
+    }
+
+    private void ApplyUpdateStatus(AgentInfo agent, UpdateStatusPayload status)
+    {
+        var statusValue = (status.Status ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(statusValue))
+        {
+            return;
+        }
+
+        var normalized = statusValue.ToLowerInvariant();
+        var message = status.Message ?? "";
+        agent.UpdateStatus = normalized;
+        agent.UpdateMessage = message;
+
+        if (normalized is "starting" or "starting_update" or "downloading" or "installing" or "applying")
+        {
+            agent.UpdateInProgress = true;
+            if (agent.UpdateStartedUtc == default)
+            {
+                agent.UpdateStartedUtc = DateTime.UtcNow;
+            }
+            agent.UpdateGraceUntilUtc = DateTime.UtcNow.Add(_updateGracePeriod);
+            agent.LastResult = "Updating";
+            agent.LastError = "None";
+        }
+        else if (normalized is "restarting")
+        {
+            MarkUpdateRestarting(agent, string.IsNullOrWhiteSpace(message) ? "Agent restarting for update." : message);
+        }
+        else if (normalized is "updated")
+        {
+            MarkUpdateSuccess(agent, message);
+        }
+        else if (normalized is "failed")
+        {
+            MarkUpdateFailed(agent, message);
+        }
+
+        _logger.Info($"Update status pcId={agent.PcId} status={normalized} message={message}");
+    }
+
+    private void EvaluateUpdateCompletion(AgentInfo agent)
+    {
+        if (!agent.UpdateInProgress)
+        {
+            return;
+        }
+
+        if (IsUpdateSuccess(agent))
+        {
+            MarkUpdateSuccess(agent);
+            return;
+        }
+
+        if (DateTime.UtcNow > agent.UpdateGraceUntilUtc)
+        {
+            MarkUpdateFailed(agent, "Update did not complete before timeout.");
+            return;
+        }
+
+        if (!string.Equals(agent.UpdateStatus, "restarting", StringComparison.OrdinalIgnoreCase))
+        {
+            MarkUpdateRestarting(agent, "Waiting for update restart.");
+        }
+    }
+
+    private bool IsUpdateSuccess(AgentInfo agent)
+    {
+        if (!string.IsNullOrWhiteSpace(agent.UpdateExpectedVersion))
+        {
+            return VersionUtil.Compare(agent.Version, agent.UpdateExpectedVersion) >= 0;
+        }
+
+        if (!string.IsNullOrWhiteSpace(agent.UpdatePreviousVersion))
+        {
+            return VersionUtil.Compare(agent.Version, agent.UpdatePreviousVersion) > 0;
+        }
+
+        return false;
+    }
+
+    private string ResolveExpectedVersion(string manifestUrl)
+    {
+        var localManifest = Path.Combine(DadBoardPaths.UpdateSourceDir, "latest.json");
+        var version = TryReadManifestVersion(localManifest);
+        if (!string.IsNullOrWhiteSpace(version))
+        {
+            return version;
+        }
+
+        if (TryResolveManifestPath(manifestUrl, out var path))
+        {
+            version = TryReadManifestVersion(path);
+            if (!string.IsNullOrWhiteSpace(version))
+            {
+                return version;
+            }
+        }
+
+        return "";
+    }
+
+    private static bool TryResolveManifestPath(string manifestUrl, out string path)
+    {
+        path = "";
+        if (string.IsNullOrWhiteSpace(manifestUrl))
+        {
+            return false;
+        }
+
+        if (File.Exists(manifestUrl))
+        {
+            path = manifestUrl;
+            return true;
+        }
+
+        if (Uri.TryCreate(manifestUrl, UriKind.Absolute, out var uri) && uri.IsFile)
+        {
+            path = uri.LocalPath;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string TryReadManifestVersion(string path)
+    {
+        try
+        {
+            if (!File.Exists(path))
+            {
+                return "";
+            }
+
+            var json = File.ReadAllText(path);
+            var manifest = JsonSerializer.Deserialize<UpdateManifest>(json, JsonUtil.Options);
+            return VersionUtil.Normalize(manifest?.LatestVersion ?? "");
+        }
+        catch
+        {
+            return "";
+        }
     }
 
     private void BroadcastUpdateSource()
@@ -1679,6 +1884,7 @@ public sealed class LeaderService : IDisposable
             agent.LastAckOk = ack?.Ok ?? false;
             agent.LastAckError = ack?.ErrorMessage ?? "";
             agent.LastAckTs = DateTime.UtcNow;
+            _logger.Info($"Ack received pcId={agent.PcId} ok={agent.LastAckOk} error={agent.LastAckError}");
             if (!agent.LastAckOk)
             {
                 agent.LastStatus = "failed";
@@ -1706,8 +1912,7 @@ public sealed class LeaderService : IDisposable
             var status = envelope.Payload.Deserialize<UpdateStatusPayload>(JsonUtil.Options);
             if (status != null)
             {
-                agent.UpdateStatus = status.Status ?? "";
-                agent.UpdateMessage = status.Message ?? "";
+                ApplyUpdateStatus(agent, status);
             }
         }
     }

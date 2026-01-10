@@ -23,6 +23,12 @@ public sealed class AgentInfo
     public string LastError { get; set; } = "";
     public string UpdateStatus { get; set; } = "";
     public string UpdateMessage { get; set; } = "";
+    public string UpdateExpectedVersion { get; set; } = "";
+    public string UpdatePreviousVersion { get; set; } = "";
+    public DateTime UpdateRequestedUtc { get; set; }
+    public DateTime UpdateStartedUtc { get; set; }
+    public DateTime UpdateGraceUntilUtc { get; set; }
+    public bool UpdateInProgress { get; set; }
 }
 
 public sealed class ConnectionInfo

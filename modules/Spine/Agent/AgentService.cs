@@ -356,6 +356,8 @@ public sealed class AgentService : IDisposable
             _ = Task.Run(async () =>
             {
                 SendAck(socket, envelope.CorrelationId, ok: true, null);
+                SendUpdateStatus("starting_update", "Update requested.");
+                _logger.Info("Update requested via TriggerUpdateNow command.");
                 await CheckForUpdatesAsync(force: true, manifestOverride: command.ManifestUrl).ConfigureAwait(false);
             });
             return;
@@ -506,6 +508,13 @@ public sealed class AgentService : IDisposable
             _logger.Warn("Updates disabled due to repeated failures.");
             return;
         }
+        if (_updateState.UpdatesDisabled && force)
+        {
+            var message = "Updates disabled due to repeated failures.";
+            SendUpdateStatus("failed", message);
+            _logger.Warn(message);
+            return;
+        }
 
         lock (_updateLock)
         {
@@ -519,6 +528,9 @@ public sealed class AgentService : IDisposable
         var fallbackUrl = GetFallbackManifestUrl(primaryUrl);
         if (string.IsNullOrWhiteSpace(primaryUrl) && string.IsNullOrWhiteSpace(fallbackUrl))
         {
+            var message = "Update source not configured.";
+            SendUpdateStatus("failed", message);
+            _logger.Warn(message);
             return;
         }
 
@@ -528,7 +540,9 @@ public sealed class AgentService : IDisposable
             var (manifest, error, usedUrl) = await TryLoadManifestWithFallback(primaryUrl, fallbackUrl).ConfigureAwait(false);
             if (manifest == null)
             {
-                RegisterUpdateFailure(error ?? "Manifest unavailable.");
+                var message = error ?? "Manifest unavailable.";
+                RegisterUpdateFailure(message);
+                SendUpdateStatus("failed", message);
                 return;
             }
 
