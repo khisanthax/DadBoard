@@ -6,7 +6,7 @@ namespace DadBoard.Setup;
 
 public sealed class SetupLogger : IDisposable
 {
-    private readonly string _logPath;
+    private string _logPath;
     private readonly object _lock = new();
     private readonly StreamWriter _writer;
     private bool _disposed;
@@ -25,8 +25,21 @@ public sealed class SetupLogger : IDisposable
             Directory.CreateDirectory(Path.GetDirectoryName(_logPath)!);
         }
 
-        var stream = new FileStream(_logPath, FileMode.Append, FileAccess.Write, FileShare.Read);
-        _writer = new StreamWriter(stream) { AutoFlush = true };
+        try
+        {
+            var stream = new FileStream(_logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+            _writer = new StreamWriter(stream) { AutoFlush = true };
+        }
+        catch
+        {
+            var dir = Path.GetDirectoryName(_logPath) ?? DadBoardPaths.SetupLogDir;
+            Directory.CreateDirectory(dir);
+            var fallback = Path.Combine(dir, $"setup_{DateTime.UtcNow:yyyyMMdd_HHmmss}.log");
+            _logPath = fallback;
+            var stream = new FileStream(_logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+            _writer = new StreamWriter(stream) { AutoFlush = true };
+        }
+
         _writer.WriteLine($"{DateTime.UtcNow:O} [INFO] Setup started.");
     }
 
