@@ -6,10 +6,13 @@ Usage:
     .\DadBoard-WipeAll.ps1 -WhatIf -Verbose
   Real wipe:
     .\DadBoard-WipeAll.ps1 -Force -Verbose
+  Real wipe (elevated):
+    .\DadBoard-WipeAll.ps1 -Force -Verbose -Elevate
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    [switch]$Force
+    [switch]$Force,
+    [switch]$Elevate
 )
 
 $scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Get-Location }
@@ -27,6 +30,34 @@ function Write-Log {
 }
 
 Write-Log "Starting DadBoard wipe-all. Log file: $logPath"
+
+function Test-IsAdmin {
+    $current = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($current)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+if ($Elevate -and -not (Test-IsAdmin)) {
+    $args = @(
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", "`"$PSCommandPath`""
+    )
+
+    if ($Force) { $args += "-Force" }
+    if ($WhatIfPreference) { $args += "-WhatIf" }
+    if ($VerbosePreference -eq "Continue") { $args += "-Verbose" }
+
+    try {
+        Start-Process -FilePath "powershell.exe" -ArgumentList $args -Verb RunAs | Out-Null
+        Write-Host "Elevated run requested. Continuing in elevated session..."
+    }
+    catch {
+        Write-Log "Elevation failed: $($_.Exception.Message)" "WARN"
+        Write-Host "Elevation failed. Re-run PowerShell as Administrator or omit -Elevate."
+    }
+    return
+}
 
 if (-not $Force) {
     $answer = Read-Host "This will remove DadBoard and all local state. Continue? (Y/N)"
