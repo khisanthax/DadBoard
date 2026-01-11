@@ -363,6 +363,21 @@ public sealed class AgentService : IDisposable
             return;
         }
 
+        if (envelope.Type == ProtocolConstants.TypeCommandResetUpdateFailures)
+        {
+            var command = envelope.Payload.Deserialize<ResetUpdateFailuresCommand>(JsonUtil.Options);
+            _state.LastCommandId = envelope.CorrelationId;
+            _state.LastCommandType = envelope.Type;
+            _state.LastCommandTs = DateTime.UtcNow.ToString("O");
+
+            _ = Task.Run(() =>
+            {
+                SendAck(socket, envelope.CorrelationId, ok: true, null);
+                ResetUpdateFailures(command?.Initiator ?? "leader");
+            });
+            return;
+        }
+
         if (envelope.Type == ProtocolConstants.TypeUpdateSource)
         {
             var payload = envelope.Payload.Deserialize<UpdateSourcePayload>(JsonUtil.Options);
@@ -857,6 +872,11 @@ public sealed class AgentService : IDisposable
         UpdateStateStore.Save(_updateState);
     }
 
+    public void ResetUpdateFailuresLocal(string initiator)
+    {
+        ResetUpdateFailures(string.IsNullOrWhiteSpace(initiator) ? "local" : initiator);
+    }
+
     private async Task ExecuteUpdateSelf(string correlationId, UpdateSelfCommand command, WebSocket socket)
     {
         SendAck(socket, correlationId, ok: true, null);
@@ -875,7 +895,14 @@ public sealed class AgentService : IDisposable
         var payload = new UpdateStatusPayload
         {
             Status = status,
-            Message = message
+            Message = message,
+            UpdatesDisabled = _updateState.UpdatesDisabled,
+            ConsecutiveFailures = _updateState.ConsecutiveFailures,
+            LastError = _updateState.LastError,
+            LastResult = _updateState.LastResult,
+            DisabledUntilUtc = _updateState.DisabledUntilUtc,
+            LastResetUtc = _updateState.LastResetUtc,
+            LastResetBy = _updateState.LastResetBy
         };
 
         foreach (var socket in _clients.Keys)
@@ -894,9 +921,35 @@ public sealed class AgentService : IDisposable
         var payload = new UpdateStatusPayload
         {
             Status = _state.UpdateStatus,
-            Message = _state.UpdateMessage
+            Message = _state.UpdateMessage,
+            UpdatesDisabled = _updateState.UpdatesDisabled,
+            ConsecutiveFailures = _updateState.ConsecutiveFailures,
+            LastError = _updateState.LastError,
+            LastResult = _updateState.LastResult,
+            DisabledUntilUtc = _updateState.DisabledUntilUtc,
+            LastResetUtc = _updateState.LastResetUtc,
+            LastResetBy = _updateState.LastResetBy
         };
         SendEnvelope(socket, ProtocolConstants.TypeUpdateStatus, "", payload);
+    }
+
+    private void ResetUpdateFailures(string initiator)
+    {
+        _logger.Info($"ResetUpdateFailures: before disabled={_updateState.UpdatesDisabled} failures={_updateState.ConsecutiveFailures}");
+        _updateState.ConsecutiveFailures = 0;
+        _updateState.UpdatesDisabled = false;
+        _updateState.LastResult = "";
+        _updateState.LastError = "";
+        _updateState.DisabledUntilUtc = "";
+        _updateState.LastResetUtc = DateTime.UtcNow.ToString("O");
+        _updateState.LastResetBy = initiator;
+        UpdateStateStore.Save(_updateState);
+
+        _state.UpdateStatus = "idle";
+        _state.UpdateMessage = "Update failures reset.";
+        SendUpdateStatus("idle", "Update failures reset.");
+        _logger.Info($"ResetUpdateFailures: after disabled={_updateState.UpdatesDisabled} failures={_updateState.ConsecutiveFailures}");
+        _logger.Info($"Update failures reset by {initiator}.");
     }
 
     private Task ExecuteShutdown(string correlationId, ShutdownAppCommand command, WebSocket socket)

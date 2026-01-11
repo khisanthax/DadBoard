@@ -25,6 +25,12 @@ public sealed class DiagnosticsForm : Form
     private readonly TextBox _availableVersion = new();
     private readonly TextBox _updateDecision = new();
     private readonly TextBox _updateSource = new();
+    private readonly TextBox _updatesDisabled = new();
+    private readonly TextBox _consecutiveFailures = new();
+    private readonly TextBox _updateLastResult = new();
+    private readonly TextBox _updateLastError = new();
+    private readonly TextBox _updateDisabledUntil = new();
+    private readonly TextBox _updateLastReset = new();
     private readonly TextBox _logsPath = new();
     private readonly TextBox _updateError = new();
     private readonly TextBox _mirrorStatus = new();
@@ -58,9 +64,16 @@ public sealed class DiagnosticsForm : Form
 
         _layout.Dock = DockStyle.Fill;
         _layout.ColumnCount = 2;
-        _layout.RowCount = 19;
+        _layout.RowCount = 25;
         _layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
         _layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -97,16 +110,22 @@ public sealed class DiagnosticsForm : Form
         AddRow("Update channel", _updateChannel, 4);
         AddRow("Available version", _availableVersion, 5);
         AddRow("Update decision", _updateDecision, 6);
-        AddRow("Update source", _updateSource, 7);
-        AddRow("Update source error", _updateError, 8);
-        AddRow("Advanced / Override manifest URL", BuildManifestEditor(), 9);
-        AddRow("Mirror status", _mirrorStatus, 10);
-        AddRow("Mirror host URL", _mirrorHostUrl, 11);
-        AddRow("Last manifest fetch", _mirrorLastManifest, 12);
-        AddRow("Last zip download", _mirrorLastDownload, 13);
-        AddRow("Cached versions", _mirrorCached, 14);
-        AddRow("Logs folder", _logsPath, 15);
-        AddRow("Update self-test", BuildSelfTestPanel(), 16);
+        AddRow("Updates disabled", _updatesDisabled, 7);
+        AddRow("Consecutive failures", _consecutiveFailures, 8);
+        AddRow("Last update result", _updateLastResult, 9);
+        AddRow("Last update error", _updateLastError, 10);
+        AddRow("Disabled until", _updateDisabledUntil, 11);
+        AddRow("Last reset", _updateLastReset, 12);
+        AddRow("Update source", _updateSource, 13);
+        AddRow("Update source error", _updateError, 14);
+        AddRow("Advanced / Override manifest URL", BuildManifestEditor(), 15);
+        AddRow("Mirror status", _mirrorStatus, 16);
+        AddRow("Mirror host URL", _mirrorHostUrl, 17);
+        AddRow("Last manifest fetch", _mirrorLastManifest, 18);
+        AddRow("Last zip download", _mirrorLastDownload, 19);
+        AddRow("Cached versions", _mirrorCached, 20);
+        AddRow("Logs folder", _logsPath, 21);
+        AddRow("Update self-test", BuildSelfTestPanel(), 22);
 
         var agentLabel = new Label
         {
@@ -114,7 +133,7 @@ public sealed class DiagnosticsForm : Form
             TextAlign = ContentAlignment.MiddleLeft,
             Dock = DockStyle.Fill
         };
-        _layout.Controls.Add(agentLabel, 0, 17);
+        _layout.Controls.Add(agentLabel, 0, 23);
 
         _agentVersions.View = View.Details;
         _agentVersions.FullRowSelect = true;
@@ -122,7 +141,7 @@ public sealed class DiagnosticsForm : Form
         _agentVersions.Columns.Add("PC", 200);
         _agentVersions.Columns.Add("Version", 120);
         _agentVersions.Dock = DockStyle.Fill;
-        _layout.Controls.Add(_agentVersions, 1, 17);
+        _layout.Controls.Add(_agentVersions, 1, 23);
 
         var buttonPanel = new FlowLayoutPanel
         {
@@ -149,7 +168,7 @@ public sealed class DiagnosticsForm : Form
         buttonPanel.Controls.Add(_launchInstalledButton);
 
         _layout.Controls.Add(_devWarning, 0, 0);
-        _layout.Controls.Add(buttonPanel, 0, 18);
+        _layout.Controls.Add(buttonPanel, 0, 24);
         _layout.SetColumnSpan(buttonPanel, 2);
 
         Controls.Add(_layout);
@@ -167,6 +186,12 @@ public sealed class DiagnosticsForm : Form
         _updateChannel.Text = "Loading...";
         _availableVersion.Text = "Loading...";
         _updateDecision.Text = "Loading...";
+        _updatesDisabled.Text = "Loading...";
+        _consecutiveFailures.Text = "Loading...";
+        _updateLastResult.Text = "Loading...";
+        _updateLastError.Text = "Loading...";
+        _updateDisabledUntil.Text = "Loading...";
+        _updateLastReset.Text = "Loading...";
         _updateSource.Text = "Loading...";
         _updateError.Text = "";
         _logsPath.Text = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DadBoard", "logs");
@@ -397,6 +422,24 @@ public sealed class DiagnosticsForm : Form
 
             if (state != null)
             {
+                _updatesDisabled.Text = state.UpdatesDisabled ? "Yes" : "No";
+                _consecutiveFailures.Text = state.ConsecutiveFailures.ToString();
+                _updateLastResult.Text = string.IsNullOrWhiteSpace(state.LastResult) ? "-" : state.LastResult;
+                _updateLastError.Text = string.IsNullOrWhiteSpace(state.LastError) ? "-" : state.LastError;
+                _updateDisabledUntil.Text = string.IsNullOrWhiteSpace(state.DisabledUntilUtc) ? "-" : state.DisabledUntilUtc;
+                if (string.IsNullOrWhiteSpace(state.LastResetUtc))
+                {
+                    _updateLastReset.Text = "-";
+                }
+                else if (string.IsNullOrWhiteSpace(state.LastResetBy))
+                {
+                    _updateLastReset.Text = state.LastResetUtc;
+                }
+                else
+                {
+                    _updateLastReset.Text = $"{state.LastResetUtc} ({state.LastResetBy})";
+                }
+
                 if (state.UpdatesDisabled)
                 {
                     _updateError.Text = "Updates disabled due to repeated failures.";
@@ -412,6 +455,12 @@ public sealed class DiagnosticsForm : Form
             }
             else
             {
+                _updatesDisabled.Text = "-";
+                _consecutiveFailures.Text = "-";
+                _updateLastResult.Text = "-";
+                _updateLastError.Text = "-";
+                _updateDisabledUntil.Text = "-";
+                _updateLastReset.Text = "-";
                 _updateError.Text = "None";
             }
 
@@ -476,6 +525,12 @@ public sealed class DiagnosticsForm : Form
         sb.AppendLine($"Update channel: {_updateChannel.Text}");
         sb.AppendLine($"Available version: {_availableVersion.Text}");
         sb.AppendLine($"Update decision: {_updateDecision.Text}");
+        sb.AppendLine($"Updates disabled: {_updatesDisabled.Text}");
+        sb.AppendLine($"Consecutive failures: {_consecutiveFailures.Text}");
+        sb.AppendLine($"Last update result: {_updateLastResult.Text}");
+        sb.AppendLine($"Last update error: {_updateLastError.Text}");
+        sb.AppendLine($"Disabled until: {_updateDisabledUntil.Text}");
+        sb.AppendLine($"Last reset: {_updateLastReset.Text}");
         sb.AppendLine($"Update source: {_updateSource.Text}");
         sb.AppendLine($"Update source error: {_updateError.Text}");
         sb.AppendLine($"Mirror status: {_mirrorStatus.Text}");

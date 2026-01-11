@@ -288,7 +288,14 @@ public sealed class LeaderService : IDisposable
             LastResult = a.LastResult,
             LastError = a.LastError,
             UpdateStatus = a.UpdateStatus,
-            UpdateMessage = a.UpdateMessage
+            UpdateMessage = a.UpdateMessage,
+            UpdateDisabled = a.UpdateDisabled,
+            UpdateConsecutiveFailures = a.UpdateConsecutiveFailures,
+            UpdateLastError = a.UpdateLastError,
+            UpdateLastResult = a.UpdateLastResult,
+            UpdateDisabledUntilUtc = a.UpdateDisabledUntilUtc,
+            UpdateLastResetUtc = a.UpdateLastResetUtc,
+            UpdateLastResetBy = a.UpdateLastResetBy
         }).OrderBy(a => a.Name, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
@@ -434,6 +441,28 @@ public sealed class LeaderService : IDisposable
 
         _logger.Info($"Update requested (single) pcId={agent.PcId} ip={agent.Ip}");
         _ = Task.Run(() => SendUpdateSelf(agent));
+        return true;
+    }
+
+    public bool ResetUpdateFailures(string pcId, string initiator, out string? error)
+    {
+        error = null;
+        if (!_agents.TryGetValue(pcId, out var agent))
+        {
+            error = "Agent not found.";
+            return false;
+        }
+
+        _logger.Info($"ResetUpdateFailures requested pcId={agent.PcId} initiator={initiator} beforeDisabled={agent.UpdateDisabled} beforeFailures={agent.UpdateConsecutiveFailures}");
+        ClearUpdateFailureCache(agent, initiator, true);
+        _logger.Info($"ResetUpdateFailures applied pcId={agent.PcId} afterDisabled={agent.UpdateDisabled} afterFailures={agent.UpdateConsecutiveFailures}");
+
+        if (!agent.Online)
+        {
+            return true;
+        }
+
+        _ = Task.Run(() => SendResetUpdateFailures(agent, initiator));
         return true;
     }
 
@@ -1524,6 +1553,43 @@ public sealed class LeaderService : IDisposable
         }
     }
 
+    private async Task SendResetUpdateFailures(AgentInfo agent, string initiator)
+    {
+        var connection = await EnsureConnection(agent).ConfigureAwait(false);
+        if (connection == null || connection.Socket.State != WebSocketState.Open)
+        {
+            _logger.Warn($"ResetUpdateFailures send failed: {agent.Name} not connected.");
+            return;
+        }
+
+        var payload = new ResetUpdateFailuresCommand
+        {
+            Initiator = initiator
+        };
+
+        var envelope = new
+        {
+            type = ProtocolConstants.TypeCommandResetUpdateFailures,
+            correlationId = Guid.NewGuid().ToString("N"),
+            pcId = agent.PcId,
+            payload,
+            ts = DateTime.UtcNow.ToString("O")
+        };
+
+        var json = JsonSerializer.Serialize(envelope, JsonUtil.Options);
+        var buffer = Encoding.UTF8.GetBytes(json);
+
+        try
+        {
+            await connection.Socket.SendAsync(buffer, WebSocketMessageType.Text, true, _cts.Token).ConfigureAwait(false);
+            _logger.Info($"ResetUpdateFailures sent to pcId={agent.PcId}");
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn($"ResetUpdateFailures send failed for {agent.Name}: {ex.Message}");
+        }
+    }
+
     private string GetPreferredManifestUrl(AgentInfo agent)
     {
         var local = GetLocalManifestUrl(agent);
@@ -1579,6 +1645,11 @@ public sealed class LeaderService : IDisposable
         agent.UpdateInProgress = false;
         agent.LastResult = "Updated";
         agent.LastError = "None";
+        agent.UpdateDisabled = false;
+        agent.UpdateConsecutiveFailures = 0;
+        agent.UpdateLastError = "";
+        agent.UpdateLastResult = "";
+        agent.UpdateDisabledUntilUtc = "";
         _logger.Info($"Update success pcId={agent.PcId} version={agent.Version}");
     }
 
@@ -1589,7 +1660,31 @@ public sealed class LeaderService : IDisposable
         agent.UpdateInProgress = false;
         agent.LastResult = "Failed";
         agent.LastError = string.IsNullOrWhiteSpace(message) ? "Update failed." : message;
+        agent.UpdateLastError = agent.LastError;
+        agent.UpdateLastResult = agent.LastResult;
         _logger.Warn($"Update failed pcId={agent.PcId} error={agent.LastError}");
+    }
+
+    private void ClearUpdateFailureCache(AgentInfo agent, string initiator, bool resetStatus)
+    {
+        agent.UpdateDisabled = false;
+        agent.UpdateConsecutiveFailures = 0;
+        if (resetStatus)
+        {
+            agent.UpdateStatus = "idle";
+            agent.UpdateMessage = "Update failures reset.";
+        }
+        agent.UpdateLastError = "";
+        agent.UpdateLastResult = "";
+        agent.UpdateDisabledUntilUtc = "";
+        agent.UpdateLastResetUtc = DateTime.UtcNow.ToString("O");
+        agent.UpdateLastResetBy = initiator;
+        if (resetStatus)
+        {
+            agent.LastResult = "";
+            agent.LastError = "";
+        }
+        _logger.Info($"ResetUpdateFailures applied to {agent.PcId} by {initiator}");
     }
 
     private void ApplyUpdateStatus(AgentInfo agent, UpdateStatusPayload status)
@@ -1602,8 +1697,43 @@ public sealed class LeaderService : IDisposable
 
         var normalized = statusValue.ToLowerInvariant();
         var message = status.Message ?? "";
+        var wasDisabled = agent.UpdateDisabled;
         agent.UpdateStatus = normalized;
         agent.UpdateMessage = message;
+        if (status.UpdatesDisabled.HasValue)
+        {
+            agent.UpdateDisabled = status.UpdatesDisabled.Value;
+        }
+
+        if (status.ConsecutiveFailures.HasValue)
+        {
+            agent.UpdateConsecutiveFailures = status.ConsecutiveFailures.Value;
+        }
+
+        if (!string.IsNullOrWhiteSpace(status.LastError))
+        {
+            agent.UpdateLastError = status.LastError;
+        }
+
+        if (!string.IsNullOrWhiteSpace(status.LastResult))
+        {
+            agent.UpdateLastResult = status.LastResult;
+        }
+
+        if (!string.IsNullOrWhiteSpace(status.DisabledUntilUtc))
+        {
+            agent.UpdateDisabledUntilUtc = status.DisabledUntilUtc;
+        }
+
+        if (!string.IsNullOrWhiteSpace(status.LastResetUtc))
+        {
+            agent.UpdateLastResetUtc = status.LastResetUtc;
+        }
+
+        if (!string.IsNullOrWhiteSpace(status.LastResetBy))
+        {
+            agent.UpdateLastResetBy = status.LastResetBy;
+        }
 
         if (normalized is "starting" or "starting_update" or "downloading" or "installing" or "applying")
         {
@@ -1627,6 +1757,11 @@ public sealed class LeaderService : IDisposable
         else if (normalized is "failed")
         {
             MarkUpdateFailed(agent, message);
+        }
+
+        if (wasDisabled && !agent.UpdateDisabled)
+        {
+            ClearUpdateFailureCache(agent, "agent", false);
         }
 
         _logger.Info($"Update status pcId={agent.PcId} status={normalized} message={message}");

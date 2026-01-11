@@ -14,6 +14,7 @@ public static class ProtocolConstants
     public const string TypeCommandScanSteamGames = "Command.ScanSteamGames";
     public const string TypeCommandUpdateSelf = "Command.UpdateSelf";
     public const string TypeCommandTriggerUpdateNow = "Command.TriggerUpdateNow";
+    public const string TypeCommandResetUpdateFailures = "Command.ResetUpdateFailures";
     public const string TypeUpdateSource = "Update.Source";
     public const string TypeSteamInventory = "SteamInventory";
     public const string TypeUpdateStatus = "UpdateStatus";
@@ -83,6 +84,11 @@ public sealed class TriggerUpdateNowCommand
     public string? ManifestUrl { get; set; }
 }
 
+public sealed class ResetUpdateFailuresCommand
+{
+    public string? Initiator { get; set; }
+}
+
 public sealed class UpdateSourcePayload
 {
     public string? PrimaryManifestUrl { get; set; }
@@ -106,6 +112,13 @@ public sealed class UpdateStatusPayload
 {
     public string Status { get; set; } = "";
     public string? Message { get; set; }
+    public bool? UpdatesDisabled { get; set; }
+    public int? ConsecutiveFailures { get; set; }
+    public string? LastError { get; set; }
+    public string? LastResult { get; set; }
+    public string? DisabledUntilUtc { get; set; }
+    public string? LastResetUtc { get; set; }
+    public string? LastResetBy { get; set; }
 }
 
 public sealed class AgentConfig

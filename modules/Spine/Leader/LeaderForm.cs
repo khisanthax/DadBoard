@@ -334,6 +334,7 @@ public sealed class LeaderForm : Form
         _agentsGrid.MultiSelect = false;
         _agentsGrid.SelectionChanged += (_, _) => UpdateAgentActions();
         _agentsGrid.MouseDown += AgentsGridMouseDown;
+        _agentsGrid.CellContentClick += AgentsGridCellContentClick;
         _agentsGrid.ContextMenuStrip = _rowMenu;
 
         _rowMenu.Items.AddRange(new ToolStripItem[]
@@ -446,6 +447,11 @@ public sealed class LeaderForm : Form
                         : "Up-to-date";
                 }
                 var updateStatus = FormatUpdateStatus(agent.UpdateStatus);
+                var canReset = agent.Online ||
+                               agent.UpdateDisabled ||
+                               agent.UpdateConsecutiveFailures > 0 ||
+                               (!string.IsNullOrWhiteSpace(agent.UpdateMessage) &&
+                                agent.UpdateMessage.IndexOf("disabled", StringComparison.OrdinalIgnoreCase) >= 0);
 
                 _agentsGrid.Rows.Add(
                     agent.PcId,
@@ -459,12 +465,19 @@ public sealed class LeaderForm : Form
                     updateStatus,
                     ackText,
                     resultText,
-                    truncatedError
+                    truncatedError,
+                    "Reset Update Failures"
                 );
 
                 var row = _agentsGrid.Rows[^1];
                 row.Cells["error"].ToolTipText = lastError;
                 row.Cells["update"].ToolTipText = agent.UpdateMessage ?? "";
+                row.Cells["reset"].Tag = canReset;
+                if (!canReset)
+                {
+                    row.Cells["reset"].Style.ForeColor = SystemColors.GrayText;
+                    row.Cells["reset"].Style.BackColor = SystemColors.ControlLight;
+                }
             }
 
             _agentsGrid.ClearSelection();
@@ -613,6 +626,15 @@ public sealed class LeaderForm : Form
         _agentsGrid.Columns.Add("ack", "Ack");
         _agentsGrid.Columns.Add("result", "Last Result");
         _agentsGrid.Columns.Add("error", "Last Error");
+        var resetColumn = new DataGridViewButtonColumn
+        {
+            Name = "reset",
+            HeaderText = "Reset Update Failures",
+            Text = "Reset Update Failures",
+            UseColumnTextForButtonValue = true,
+            AutoSizeMode = DataGridViewAutoSizeColumnMode.AllCells
+        };
+        _agentsGrid.Columns.Add(resetColumn);
     }
 
     private void EnsureGamesGridColumns(IEnumerable<AgentInfo> remoteAgents)
@@ -1381,6 +1403,57 @@ public sealed class LeaderForm : Form
         _agentsGrid.ClearSelection();
         _agentsGrid.Rows[hit.RowIndex].Selected = true;
         UpdateAgentActions();
+    }
+
+    private void AgentsGridCellContentClick(object? sender, DataGridViewCellEventArgs e)
+    {
+        if (e.RowIndex < 0 || e.ColumnIndex < 0)
+        {
+            return;
+        }
+
+        if (_agentsGrid.Columns[e.ColumnIndex].Name != "reset")
+        {
+            return;
+        }
+
+        var row = _agentsGrid.Rows[e.RowIndex];
+        var canReset = row.Cells["reset"].Tag as bool? ?? false;
+        if (!canReset)
+        {
+            MessageBox.Show(
+                "Reset is available when the agent is online or has cached update failures.",
+                "DadBoard",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
+        var pcId = row.Cells["pcId"].Value?.ToString();
+        var name = row.Cells["name"].Value?.ToString() ?? "agent";
+        if (string.IsNullOrWhiteSpace(pcId))
+        {
+            MessageBox.Show("Unable to identify agent.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        var confirm = MessageBox.Show(
+            $"This clears the update circuit breaker and retry backoff for {name}. Continue?",
+            "DadBoard",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question);
+        if (confirm != DialogResult.Yes)
+        {
+            return;
+        }
+
+        if (!_service.ResetUpdateFailures(pcId, "dashboard", out var error))
+        {
+            MessageBox.Show(error ?? "Reset failed.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        _statusLabel.Text = $"Update failures reset for {name}. You can retry update now.";
     }
 
     private void UpdateContextMenuState()

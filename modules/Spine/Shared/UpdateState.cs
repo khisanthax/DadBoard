@@ -10,5 +10,8 @@ public sealed class UpdateState
     public string LatestVersion { get; set; } = "";
     public int ConsecutiveFailures { get; set; }
     public bool UpdatesDisabled { get; set; }
+    public string DisabledUntilUtc { get; set; } = "";
+    public string LastResetUtc { get; set; } = "";
+    public string LastResetBy { get; set; } = "";
     public string FallbackManifestUrl { get; set; } = "";
 }

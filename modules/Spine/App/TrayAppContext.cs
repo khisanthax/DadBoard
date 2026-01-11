@@ -33,6 +33,7 @@ sealed class TrayAppContext : ApplicationContext
     private readonly ToolStripMenuItem _startLeaderOnLoginItem;
     private readonly ToolStripMenuItem _installItem;
     private readonly ToolStripMenuItem _runSetupItem;
+    private readonly ToolStripMenuItem _resetUpdateFailuresItem;
     private readonly ToolStripMenuItem _statusItem;
     private readonly ToolStripMenuItem _diagnosticsItem;
 
@@ -69,6 +70,7 @@ sealed class TrayAppContext : ApplicationContext
 
         _installItem = new ToolStripMenuItem("Install (Admin)", null, (_, _) => Install());
         _runSetupItem = new ToolStripMenuItem("Update / Run Setup...", null, (_, _) => _ = RunSetupAsync());
+        _resetUpdateFailuresItem = new ToolStripMenuItem("Reset Update Failures (This PC)", null, (_, _) => ResetUpdateFailuresLocal());
         _statusItem = new ToolStripMenuItem("Show Status", null, (_, _) => ShowStatus());
         _diagnosticsItem = new ToolStripMenuItem("Diagnostics", null, (_, _) => ShowDiagnostics());
 
@@ -82,6 +84,7 @@ sealed class TrayAppContext : ApplicationContext
             _startLeaderOnLoginItem,
             _installItem,
             _runSetupItem,
+            _resetUpdateFailuresItem,
             _statusItem,
             _diagnosticsItem,
             new ToolStripSeparator(),
@@ -270,6 +273,26 @@ sealed class TrayAppContext : ApplicationContext
         }
 
         Exit();
+    }
+
+    private void ResetUpdateFailuresLocal()
+    {
+        var confirm = MessageBox.Show(
+            "This clears the update circuit breaker and retry backoff for this PC. Continue?",
+            "DadBoard",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question);
+        if (confirm != DialogResult.Yes)
+        {
+            return;
+        }
+
+        _agent.ResetUpdateFailuresLocal("tray");
+        MessageBox.Show(
+            "Update failures reset. You can retry update now.",
+            "DadBoard",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
     }
 
     private void UpdateMenuState()
