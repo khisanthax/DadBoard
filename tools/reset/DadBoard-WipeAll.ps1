@@ -87,8 +87,17 @@ try {
 $installDir = Join-Path $env:LOCALAPPDATA "Programs\DadBoard"
 $localState = Join-Path $env:LOCALAPPDATA "DadBoard"
 $programData = "C:\ProgramData\DadBoard"
+$legacyInstall = Join-Path $env:ProgramFiles "DadBoard"
+$legacyInstallX86 = if ($env:ProgramFiles -ne $env:ProgramFiles(x86) -and $env:ProgramFiles(x86)) {
+    Join-Path $env:ProgramFiles(x86) "DadBoard"
+} else {
+    ""
+}
 
-$pathsToRemove = @($installDir, $localState, $programData)
+$pathsToRemove = @($installDir, $localState, $programData, $legacyInstall)
+if ($legacyInstallX86) {
+    $pathsToRemove += $legacyInstallX86
+}
 foreach ($path in $pathsToRemove) {
     if (Test-Path $path) {
         if ($PSCmdlet.ShouldProcess($path, "Remove-Item -Recurse -Force")) {
