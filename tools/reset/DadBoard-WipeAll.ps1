@@ -88,8 +88,8 @@ $installDir = Join-Path $env:LOCALAPPDATA "Programs\DadBoard"
 $localState = Join-Path $env:LOCALAPPDATA "DadBoard"
 $programData = "C:\ProgramData\DadBoard"
 $legacyInstall = Join-Path $env:ProgramFiles "DadBoard"
-$legacyInstallX86 = if ($env:ProgramFiles -ne $env:ProgramFiles(x86) -and $env:ProgramFiles(x86)) {
-    Join-Path $env:ProgramFiles(x86) "DadBoard"
+$legacyInstallX86 = if ($env:ProgramFiles -ne ${env:ProgramFiles(x86)} -and ${env:ProgramFiles(x86)}) {
+    Join-Path ${env:ProgramFiles(x86)} "DadBoard"
 } else {
     ""
 }
