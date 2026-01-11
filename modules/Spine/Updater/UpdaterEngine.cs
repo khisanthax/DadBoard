@@ -211,6 +211,7 @@ sealed class UpdaterEngine
                 {
                     Directory.CreateDirectory(Path.GetDirectoryName(setupExe)!);
                     File.Copy(localPath, setupExe, true);
+                    FileUnblocker.TryUnblock(setupExe, log);
                     log($"Copied setup from {localPath}");
                     return true;
                 }
@@ -220,6 +221,7 @@ sealed class UpdaterEngine
                 var bytes = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
                 Directory.CreateDirectory(Path.GetDirectoryName(setupExe)!);
                 await File.WriteAllBytesAsync(setupExe, bytes, ct).ConfigureAwait(false);
+                FileUnblocker.TryUnblock(setupExe, log);
                 log($"Downloaded setup from {candidate}");
                 return true;
             }

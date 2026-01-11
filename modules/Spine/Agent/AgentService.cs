@@ -863,6 +863,7 @@ public sealed class AgentService : IDisposable
                 try
                 {
                     File.Copy(localPath, updaterExe, true);
+                    FileUnblocker.TryUnblock(updaterExe, msg => _logger.Info(msg));
                     _logger.Info($"Updater copied from {localPath}");
                     return true;
                 }
@@ -880,6 +881,7 @@ public sealed class AgentService : IDisposable
                     var bytes = await _httpClient.GetByteArrayAsync(setupUrl, _cts.Token).ConfigureAwait(false);
                     Directory.CreateDirectory(Path.GetDirectoryName(updaterExe)!);
                     await File.WriteAllBytesAsync(updaterExe, bytes, _cts.Token).ConfigureAwait(false);
+                    FileUnblocker.TryUnblock(updaterExe, msg => _logger.Info(msg));
                     _logger.Info($"Updater downloaded to {updaterExe}");
                     return true;
                 }
