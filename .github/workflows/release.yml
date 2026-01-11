@@ -10,7 +10,7 @@ on:
 
 jobs:
   nightly:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     permissions:
       contents: write
@@ -46,6 +46,22 @@ jobs:
         run: dotnet publish -c Release -r win-x64 /p:PublishSingleFile=true /p:SelfContained=true /p:Version=$env:VERSION /p:AssemblyVersion=$env:ASSEMBLY_VERSION /p:FileVersion=$env:FILE_VERSION /p:InformationalVersion=$env:INFO_VERSION
         working-directory: modules/Spine/Setup
 
+      - name: Validate version stamps
+        shell: pwsh
+        run: |
+          $expected = $env:VERSION
+          Write-Host "Expected version: $expected"
+          $app = "modules/Spine/App/bin/Release/net8.0-windows/win-x64/publish/DadBoard.exe"
+          $setup = "modules/Spine/Setup/bin/Release/net8.0-windows/win-x64/publish/DadBoardSetup.exe"
+          $appInfo = (Get-Item $app).VersionInfo
+          $setupInfo = (Get-Item $setup).VersionInfo
+          Write-Host "DadBoard.exe ProductVersion=$($appInfo.ProductVersion) FileVersion=$($appInfo.FileVersion)"
+          Write-Host "DadBoardSetup.exe ProductVersion=$($setupInfo.ProductVersion) FileVersion=$($setupInfo.FileVersion)"
+          if (-not $appInfo.ProductVersion.StartsWith($expected)) { throw "DadBoard.exe ProductVersion mismatch." }
+          if (-not $setupInfo.ProductVersion.StartsWith($expected)) { throw "DadBoardSetup.exe ProductVersion mismatch." }
+          if (-not $appInfo.FileVersion.StartsWith($env:ASSEMBLY_VERSION)) { throw "DadBoard.exe FileVersion mismatch." }
+          if (-not $setupInfo.FileVersion.StartsWith($env:ASSEMBLY_VERSION)) { throw "DadBoardSetup.exe FileVersion mismatch." }
+
       - name: Build release assets
         shell: pwsh
         run: |
@@ -73,6 +89,24 @@ jobs:
             min_supported_version = $baseVersion
           } | ConvertTo-Json -Depth 5
           Set-Content -Path "latest.json" -Value $latest -Encoding utf8
+
+      - name: Validate nightly assets
+        shell: pwsh
+        run: |
+          $version = $env:VERSION
+          $zipName = "DadBoard-$version.zip"
+          $required = @(
+            "DadBoard.exe",
+            "DadBoardSetup.exe",
+            "latest.json",
+            $zipName
+          )
+          foreach ($file in $required) {
+            if (-not (Test-Path $file)) { throw "Missing release asset: $file" }
+          }
+          $json = Get-Content latest.json -Raw | ConvertFrom-Json
+          Write-Host "latest.json latest_version=$($json.latest_version)"
+          if ($json.latest_version -ne $env:VERSION) { throw "latest.json version mismatch." }
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
