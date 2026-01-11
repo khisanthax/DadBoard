@@ -68,7 +68,7 @@ sealed class UpdaterEngine
         var setupExe = DadBoardPaths.SetupExePath;
         if (!File.Exists(setupExe))
         {
-            log("DadBoardSetup.exe missing; downloading updater.");
+            log("DadBoardSetup.exe missing; downloading setup.");
             var ok = await EnsureSetupPresentAsync(manifestUrl, manifest.PackageUrl, setupExe, ct, log).ConfigureAwait(false);
             if (!ok || !File.Exists(setupExe))
             {
@@ -76,8 +76,7 @@ sealed class UpdaterEngine
             }
         }
 
-        var localManifestPath = WriteLocalManifest(manifest, packageFile, log);
-        var exitCode = await LaunchSetupAsync(setupExe, localManifestPath, ct, log).ConfigureAwait(false);
+        var exitCode = await LaunchSetupAsync(setupExe, packageFile, ct, log).ConfigureAwait(false);
         if (exitCode != 0)
         {
             return UpdaterResult.Failed($"DadBoardSetup.exe exited with code {exitCode}.");
@@ -159,41 +158,14 @@ sealed class UpdaterEngine
         return false;
     }
 
-    private static string? WriteLocalManifest(UpdateManifest manifest, string packagePath, Action<string> log)
+    private static async Task<int> LaunchSetupAsync(string setupExe, string payloadPath, CancellationToken ct, Action<string> log)
     {
-        try
-        {
-            Directory.CreateDirectory(DadBoardPaths.UpdateSourceDir);
-            var localManifest = new UpdateManifest
-            {
-                LatestVersion = manifest.LatestVersion,
-                PackageUrl = packagePath,
-                Sha256 = manifest.Sha256,
-                ForceCheckToken = manifest.ForceCheckToken,
-                MinSupportedVersion = manifest.MinSupportedVersion
-            };
-
-            var path = Path.Combine(DadBoardPaths.UpdateSourceDir, "latest.local.json");
-            var json = JsonSerializer.Serialize(localManifest, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(path, json);
-            log($"Wrote local manifest {path}");
-            return path;
-        }
-        catch (Exception ex)
-        {
-            log($"Failed to write local manifest: {ex.Message}");
-            return null;
-        }
-    }
-
-    private static async Task<int> LaunchSetupAsync(string setupExe, string? localManifestPath, CancellationToken ct, Action<string> log)
-    {
-        if (string.IsNullOrWhiteSpace(localManifestPath))
+        if (string.IsNullOrWhiteSpace(payloadPath))
         {
             return 2;
         }
 
-        var args = $"--update --silent --manifest \"{localManifestPath}\"";
+        var args = $"repair --payload \"{payloadPath}\" --silent";
         log($"Launching setup: {setupExe} {args}");
         var startInfo = new System.Diagnostics.ProcessStartInfo
         {
@@ -239,7 +211,7 @@ sealed class UpdaterEngine
                 {
                     Directory.CreateDirectory(Path.GetDirectoryName(setupExe)!);
                     File.Copy(localPath, setupExe, true);
-                    log($"Copied updater from {localPath}");
+                    log($"Copied setup from {localPath}");
                     return true;
                 }
 
@@ -248,7 +220,7 @@ sealed class UpdaterEngine
                 var bytes = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
                 Directory.CreateDirectory(Path.GetDirectoryName(setupExe)!);
                 await File.WriteAllBytesAsync(setupExe, bytes, ct).ConfigureAwait(false);
-                log($"Downloaded updater from {candidate}");
+                log($"Downloaded setup from {candidate}");
                 return true;
             }
             catch (Exception ex)

@@ -14,20 +14,14 @@ public sealed class SetupForm : Form
     private readonly Label _statusLabel = new();
     private readonly TextBox _logBox = new();
     private readonly Button _installButton = new();
-    private readonly Button _updateButton = new();
     private readonly Button _uninstallButton = new();
     private readonly Button _startNowButton = new();
     private readonly Button _startButton = new();
     private readonly Button _closeButton = new();
     private readonly FlowLayoutPanel _actionsPanel = new();
     private readonly FlowLayoutPanel _finalPanel = new();
-    private readonly TextBox _manifestUrlInput = new();
-    private readonly TextBox _localHostIpInput = new();
-    private readonly ComboBox _channelCombo = new();
-    private readonly ComboBox _sourceModeCombo = new();
-    private readonly Button _saveUpdateConfigButton = new();
-    private readonly Button _resetUpdateConfigButton = new();
-    private readonly Label _updateStatusLabel = new();
+    private readonly TextBox _payloadPathInput = new();
+    private readonly Button _browsePayloadButton = new();
     private SetupLogger? _logger;
     private readonly CancellationTokenSource _cts = new();
 
@@ -70,10 +64,6 @@ public sealed class SetupForm : Form
         _installButton.AutoSize = true;
         _installButton.Click += async (_, _) => await RunActionAsync(SetupAction.Install);
 
-        _updateButton.Text = "Update";
-        _updateButton.AutoSize = true;
-        _updateButton.Click += async (_, _) => await RunActionAsync(SetupAction.Update);
-
         _uninstallButton.Text = "Uninstall";
         _uninstallButton.AutoSize = true;
         _uninstallButton.Click += async (_, _) => await RunActionAsync(SetupAction.Uninstall);
@@ -86,7 +76,6 @@ public sealed class SetupForm : Form
         _actionsPanel.Controls.AddRange(new Control[]
         {
             _installButton,
-            _updateButton,
             _uninstallButton,
             _startNowButton
         });
@@ -116,7 +105,7 @@ public sealed class SetupForm : Form
         layout.Controls.Add(header, 0, 0);
         layout.Controls.Add(_statusLabel, 0, 1);
         layout.Controls.Add(_actionsPanel, 0, 2);
-        layout.Controls.Add(BuildUpdateConfigPanel(), 0, 3);
+        layout.Controls.Add(BuildPayloadPanel(), 0, 3);
         layout.Controls.Add(_logBox, 0, 4);
         layout.Controls.Add(_finalPanel, 0, 5);
         Controls.Add(layout);
@@ -141,7 +130,6 @@ public sealed class SetupForm : Form
         }
 
         ShowActionsView("startup");
-        LoadUpdateConfigUi();
         UpdateActionButtons();
     }
 
@@ -170,8 +158,21 @@ public sealed class SetupForm : Form
             AppendLog(message);
         });
 
-        var manifestUrl = UpdateConfigStore.ResolveManifestUrl(UpdateConfigStore.Load());
-        var result = await SetupOperations.RunAsync(action, manifestUrl, _logger, progress, _cts.Token);
+        if (action == SetupAction.Install && string.Equals(_installButton.Text, "Repair", StringComparison.OrdinalIgnoreCase))
+        {
+            action = SetupAction.Repair;
+        }
+
+        var payloadPath = action == SetupAction.Uninstall ? null : _payloadPathInput.Text.Trim();
+        if (action != SetupAction.Uninstall && string.IsNullOrWhiteSpace(payloadPath))
+        {
+            MessageBox.Show("Select a payload zip before running install or repair.", "DadBoard Setup", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            _busy = false;
+            UpdateActionButtons();
+            return;
+        }
+
+        var result = await SetupOperations.RunAsync(action, payloadPath, null, _logger, progress, _cts.Token);
 
         if (result.Success)
         {
@@ -204,15 +205,11 @@ public sealed class SetupForm : Form
         var canonicalExists = File.Exists(DadBoardPaths.InstalledExePath);
         var legacyExists = File.Exists(DadBoardPaths.LegacyInstallExePath);
         var canonicalRunnable = IsCanonicalRunnable(out var canonicalReason);
-        var updateSourceConfigured = IsUpdateSourceConfigured();
-
         var installEnabled = !_busy && !canonicalRunnable;
-        var updateEnabled = !_busy && canonicalRunnable && updateSourceConfigured;
         var uninstallEnabled = !_busy && canonicalRunnable;
         var startEnabled = canonicalRunnable;
 
         _installButton.Enabled = installEnabled;
-        _updateButton.Enabled = updateEnabled;
         _uninstallButton.Enabled = uninstallEnabled;
         _startButton.Enabled = startEnabled;
         _startNowButton.Enabled = startEnabled;
@@ -326,11 +323,11 @@ public sealed class SetupForm : Form
         return false;
     }
 
-    private Control BuildUpdateConfigPanel()
+    private Control BuildPayloadPanel()
     {
         var group = new GroupBox
         {
-            Text = "Advanced / Override update source",
+            Text = "Payload",
             Dock = DockStyle.Fill,
             AutoSize = true
         };
@@ -342,133 +339,37 @@ public sealed class SetupForm : Form
             AutoSize = true
         };
 
-        var channelLabel = new Label
+        var label = new Label
         {
-            Text = "Update Channel",
+            Text = "Payload zip path",
             AutoSize = true,
             TextAlign = ContentAlignment.MiddleLeft
         };
 
-        var modeLabel = new Label
-        {
-            Text = "Update Source Mode",
-            AutoSize = true,
-            TextAlign = ContentAlignment.MiddleLeft
-        };
+        _payloadPathInput.Width = 520;
+        _browsePayloadButton.Text = "Browse...";
+        _browsePayloadButton.AutoSize = true;
+        _browsePayloadButton.Click += (_, _) => BrowsePayload();
 
-        var manifestLabel = new Label
-        {
-            Text = "Manifest URL",
-            AutoSize = true,
-            TextAlign = ContentAlignment.MiddleLeft
-        };
-
-        var hostLabel = new Label
-        {
-            Text = "Local host IP",
-            AutoSize = true,
-            TextAlign = ContentAlignment.MiddleLeft
-        };
-
-        _channelCombo.DropDownStyle = ComboBoxStyle.DropDownList;
-        _channelCombo.Items.Add("Nightly (recommended for development)");
-        _channelCombo.Items.Add("Stable");
-        _channelCombo.Width = 220;
-
-        _sourceModeCombo.DropDownStyle = ComboBoxStyle.DropDownList;
-        _sourceModeCombo.Items.Add("Auto (Leader mirror, fallback GitHub)");
-        _sourceModeCombo.Items.Add("GitHub only");
-        _sourceModeCombo.Width = 260;
-
-        _manifestUrlInput.Width = 420;
-        _localHostIpInput.Width = 140;
-        _saveUpdateConfigButton.Text = "Save";
-        _saveUpdateConfigButton.AutoSize = true;
-        _saveUpdateConfigButton.Click += (_, _) => SaveUpdateConfig();
-        _resetUpdateConfigButton.Text = "Reset to default";
-        _resetUpdateConfigButton.AutoSize = true;
-        _resetUpdateConfigButton.Click += (_, _) => ResetUpdateConfig();
-
-        _updateStatusLabel.AutoSize = true;
-        _updateStatusLabel.Text = "Not configured";
-
-        panel.Controls.Add(channelLabel);
-        panel.Controls.Add(_channelCombo);
-        panel.Controls.Add(modeLabel);
-        panel.Controls.Add(_sourceModeCombo);
-        panel.Controls.Add(manifestLabel);
-        panel.Controls.Add(_manifestUrlInput);
-        panel.Controls.Add(hostLabel);
-        panel.Controls.Add(_localHostIpInput);
-        panel.Controls.Add(_saveUpdateConfigButton);
-        panel.Controls.Add(_resetUpdateConfigButton);
-        panel.Controls.Add(_updateStatusLabel);
+        panel.Controls.Add(label);
+        panel.Controls.Add(_payloadPathInput);
+        panel.Controls.Add(_browsePayloadButton);
         group.Controls.Add(panel);
         return group;
     }
 
-    private void LoadUpdateConfigUi()
+    private void BrowsePayload()
     {
-        var config = UpdateConfigStore.Load();
-        _channelCombo.SelectedIndex = config.UpdateChannel == UpdateChannel.Stable ? 1 : 0;
-        _sourceModeCombo.SelectedIndex = config.UpdateSourceMode == UpdateSourceMode.GithubOnly ? 1 : 0;
-        _manifestUrlInput.Text = UpdateConfigStore.ResolveManifestUrl(config);
-        _localHostIpInput.Text = config.LocalHostIp;
-        _updateStatusLabel.Text = GetUpdateSourceStatus(config);
-    }
-
-    private void SaveUpdateConfig()
-    {
-        var url = _manifestUrlInput.Text.Trim();
-        var hostIp = _localHostIpInput.Text.Trim();
-        var config = UpdateConfigStore.Load();
-        config.UpdateChannel = _channelCombo.SelectedIndex == 1 ? UpdateChannel.Stable : UpdateChannel.Nightly;
-        config.UpdateSourceMode = _sourceModeCombo.SelectedIndex == 1 ? UpdateSourceMode.GithubOnly : UpdateSourceMode.Auto;
-        var defaultUrl = UpdateConfigStore.GetDefaultManifestUrl(config.UpdateChannel);
-        config.ManifestUrl = string.Equals(url, defaultUrl, StringComparison.OrdinalIgnoreCase) ? "" : url;
-        config.LocalHostIp = hostIp;
-        config.Source = "github_mirror";
-        config.MirrorEnabled = true;
-        UpdateConfigStore.Save(config);
-        _updateStatusLabel.Text = GetUpdateSourceStatus(config);
-        AppendLog($"Update source saved: {UpdateConfigStore.ResolveManifestUrl(config)}");
-    }
-
-    private void ResetUpdateConfig()
-    {
-        var config = UpdateConfigStore.Load();
-        config.UpdateChannel = _channelCombo.SelectedIndex == 1 ? UpdateChannel.Stable : UpdateChannel.Nightly;
-        config.UpdateSourceMode = _sourceModeCombo.SelectedIndex == 1 ? UpdateSourceMode.GithubOnly : UpdateSourceMode.Auto;
-        config.ManifestUrl = "";
-        config.LocalHostIp = "";
-        config.Source = "github_mirror";
-        config.MirrorEnabled = true;
-        UpdateConfigStore.Save(config);
-        _manifestUrlInput.Text = UpdateConfigStore.ResolveManifestUrl(config);
-        _localHostIpInput.Text = config.LocalHostIp;
-        _updateStatusLabel.Text = GetUpdateSourceStatus(config);
-        AppendLog("Update source reset to default.");
-    }
-
-    private static string GetUpdateSourceStatus(UpdateConfig config)
-    {
-        var resolved = UpdateConfigStore.ResolveManifestUrl(config);
-        if (string.IsNullOrWhiteSpace(resolved))
+        using var dialog = new OpenFileDialog
         {
-            return "Not configured";
-        }
+            Filter = "DadBoard payload (*.zip)|*.zip|All files (*.*)|*.*",
+            Title = "Select DadBoard payload zip"
+        };
 
-        if (config.UpdateSourceMode == UpdateSourceMode.GithubOnly)
+        if (dialog.ShowDialog(this) == DialogResult.OK)
         {
-            return "Configured: GitHub Only";
+            _payloadPathInput.Text = dialog.FileName;
         }
-
-        if (config.MirrorEnabled && string.Equals(config.Source, "github_mirror", StringComparison.OrdinalIgnoreCase))
-        {
-            return "Configured: Leader Mirror (GitHub)";
-        }
-
-        return "Configured: GitHub Direct";
     }
 
     private bool IsCanonicalRunnable(out string reason)
@@ -497,18 +398,6 @@ public sealed class SetupForm : Form
             reason = $"invalid_exe:{ex.Message}";
             return false;
         }
-    }
-
-    private bool IsUpdateSourceConfigured()
-    {
-        var config = UpdateConfigStore.Load();
-        if (!string.IsNullOrWhiteSpace(UpdateConfigStore.ResolveManifestUrl(config)))
-        {
-            return true;
-        }
-
-        var localManifest = Path.Combine(DadBoardPaths.UpdateSourceDir, "latest.json");
-        return File.Exists(localManifest);
     }
 
     private void TryFallbackLogger()

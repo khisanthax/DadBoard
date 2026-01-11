@@ -616,7 +616,7 @@ public sealed class AgentService : IDisposable
             _logger.Info($"Update check starting. current={current} latest={latest} tokenChanged={tokenChanged}");
 
             var updateUrl = usedUrl ?? primaryUrl;
-            var ok = await RunSetupUpdateAsync(updateUrl, fallbackUrl).ConfigureAwait(false);
+            var ok = await RunUpdaterAsync(updateUrl, fallbackUrl).ConfigureAwait(false);
             if (!ok && _lastUpdateCanceled)
             {
                 _logger.Warn("Update canceled by user; not retrying or tripping breaker.");
@@ -628,7 +628,7 @@ public sealed class AgentService : IDisposable
             {
                 _logger.Warn($"Update failed via primary manifest; retrying fallback {fallbackUrl}");
                 SendUpdateStatus("downloading", "Primary update failed; retrying fallback.");
-                ok = await RunSetupUpdateAsync(fallbackUrl, "").ConfigureAwait(false);
+                ok = await RunUpdaterAsync(fallbackUrl, "").ConfigureAwait(false);
                 if (ok)
                 {
                     _updateState.ManifestUrl = fallbackUrl;
@@ -771,33 +771,33 @@ public sealed class AgentService : IDisposable
         return "";
     }
 
-    private async Task<bool> RunSetupUpdateAsync(string manifestUrl, string fallbackManifestUrl)
+    private async Task<bool> RunUpdaterAsync(string manifestUrl, string fallbackManifestUrl)
     {
-        var setupExe = DadBoardPaths.SetupExePath;
-        if (!File.Exists(setupExe))
+        var updaterExe = DadBoardPaths.UpdaterExePath;
+        if (!File.Exists(updaterExe))
         {
-            _logger.Warn($"Updater missing: {setupExe}. Attempting download.");
+            _logger.Warn($"Updater missing: {updaterExe}. Attempting download.");
             SendUpdateStatus("downloading", "Downloading updater.");
-            var downloaded = await EnsureSetupPresentAsync(manifestUrl, fallbackManifestUrl).ConfigureAwait(false);
-            if (!downloaded || !File.Exists(setupExe))
+            var downloaded = await EnsureUpdaterPresentAsync(manifestUrl, fallbackManifestUrl).ConfigureAwait(false);
+            if (!downloaded || !File.Exists(updaterExe))
             {
-                SendUpdateStatus("failed", $"Updater not found: {setupExe}");
-                _logger.Warn($"Update skipped: {setupExe} missing after download attempt.");
+                SendUpdateStatus("failed", $"Updater not found: {updaterExe}");
+                _logger.Warn($"Update skipped: {updaterExe} missing after download attempt.");
                 return false;
             }
         }
 
         SendUpdateStatus("downloading", "Starting updater.");
-        _logger.Info($"Launching updater: {setupExe} /update --silent --manifest \"{manifestUrl}\"");
+        _logger.Info($"Launching updater: {updaterExe} --silent --manifest \"{manifestUrl}\"");
 
-        var setupDir = Path.GetDirectoryName(setupExe) ?? DadBoardPaths.InstallDir;
-        Directory.CreateDirectory(setupDir);
+        var updaterDir = Path.GetDirectoryName(updaterExe) ?? DadBoardPaths.InstallDir;
+        Directory.CreateDirectory(updaterDir);
         var startInfo = new ProcessStartInfo
         {
-            FileName = setupExe,
-            Arguments = $"/update --silent --manifest \"{manifestUrl}\"",
+            FileName = updaterExe,
+            Arguments = $"--silent --manifest \"{manifestUrl}\"",
             UseShellExecute = true,
-            WorkingDirectory = setupDir
+            WorkingDirectory = updaterDir
         };
 
         Process? process;
@@ -845,9 +845,9 @@ public sealed class AgentService : IDisposable
         return true;
     }
 
-    private async Task<bool> EnsureSetupPresentAsync(string primaryManifestUrl, string fallbackManifestUrl)
+    private async Task<bool> EnsureUpdaterPresentAsync(string primaryManifestUrl, string fallbackManifestUrl)
     {
-        var setupExe = DadBoardPaths.SetupExePath;
+        var updaterExe = DadBoardPaths.UpdaterExePath;
         var candidates = new[]
         {
             primaryManifestUrl,
@@ -858,11 +858,11 @@ public sealed class AgentService : IDisposable
 
         foreach (var manifestUrl in candidates)
         {
-            if (TryResolveLocalSetupPath(manifestUrl, out var localPath))
+            if (TryResolveLocalUpdaterPath(manifestUrl, out var localPath))
             {
                 try
                 {
-                    File.Copy(localPath, setupExe, true);
+                    File.Copy(localPath, updaterExe, true);
                     _logger.Info($"Updater copied from {localPath}");
                     return true;
                 }
@@ -872,15 +872,15 @@ public sealed class AgentService : IDisposable
                 }
             }
 
-            if (TryBuildSetupUrl(manifestUrl, out var setupUrl))
+            if (TryBuildUpdaterUrl(manifestUrl, out var setupUrl))
             {
                 try
                 {
                     _logger.Info($"Downloading updater from {setupUrl}");
                     var bytes = await _httpClient.GetByteArrayAsync(setupUrl, _cts.Token).ConfigureAwait(false);
-                    Directory.CreateDirectory(Path.GetDirectoryName(setupExe)!);
-                    await File.WriteAllBytesAsync(setupExe, bytes, _cts.Token).ConfigureAwait(false);
-                    _logger.Info($"Updater downloaded to {setupExe}");
+                    Directory.CreateDirectory(Path.GetDirectoryName(updaterExe)!);
+                    await File.WriteAllBytesAsync(updaterExe, bytes, _cts.Token).ConfigureAwait(false);
+                    _logger.Info($"Updater downloaded to {updaterExe}");
                     return true;
                 }
                 catch (Exception ex)
@@ -893,7 +893,7 @@ public sealed class AgentService : IDisposable
         return false;
     }
 
-    private static bool TryResolveLocalSetupPath(string manifestUrl, out string localPath)
+    private static bool TryResolveLocalUpdaterPath(string manifestUrl, out string localPath)
     {
         localPath = "";
         if (File.Exists(manifestUrl))
@@ -901,7 +901,7 @@ public sealed class AgentService : IDisposable
             var dir = Path.GetDirectoryName(manifestUrl);
             if (!string.IsNullOrWhiteSpace(dir))
             {
-                var candidate = Path.Combine(dir, "DadBoardSetup.exe");
+                var candidate = Path.Combine(dir, "DadBoardUpdater.exe");
                 if (File.Exists(candidate))
                 {
                     localPath = candidate;
@@ -915,7 +915,7 @@ public sealed class AgentService : IDisposable
             var dir = Path.GetDirectoryName(uri.LocalPath);
             if (!string.IsNullOrWhiteSpace(dir))
             {
-                var candidate = Path.Combine(dir, "DadBoardSetup.exe");
+                var candidate = Path.Combine(dir, "DadBoardUpdater.exe");
                 if (File.Exists(candidate))
                 {
                     localPath = candidate;
@@ -927,7 +927,7 @@ public sealed class AgentService : IDisposable
         return false;
     }
 
-    private static bool TryBuildSetupUrl(string manifestUrl, out string setupUrl)
+    private static bool TryBuildUpdaterUrl(string manifestUrl, out string setupUrl)
     {
         setupUrl = "";
         if (!Uri.TryCreate(manifestUrl, UriKind.Absolute, out var uri))
@@ -947,7 +947,7 @@ public sealed class AgentService : IDisposable
         }
 
         var baseUrl = manifestUrl.Substring(0, manifestUrl.Length - "latest.json".Length);
-        setupUrl = baseUrl + "DadBoardSetup.exe";
+        setupUrl = baseUrl + "DadBoardUpdater.exe";
         return true;
     }
 

@@ -15,14 +15,17 @@ static class Program
     {
         var action = GetAction(args);
         var silent = HasArg(args, "--silent") || HasArg(args, "/silent");
-        var manifestUrl = GetArgValue(args, "--manifest");
+        var payloadPath = GetArgValue(args, "--payload");
+        var logPath = GetArgValue(args, "--log");
+        var waitMsValue = GetArgValue(args, "--wait-ms");
+        var stopWait = TryParseWait(waitMsValue);
 
-        if (silent && action.HasValue)
+        if (action.HasValue)
         {
             SetupLogger logger;
             try
             {
-                logger = new SetupLogger();
+                logger = new SetupLogger(logPath);
             }
             catch (Exception ex)
             {
@@ -36,8 +39,20 @@ static class Program
 
             using (logger)
             {
+                if ((action.Value == SetupAction.Install || action.Value == SetupAction.Repair) &&
+                    string.IsNullOrWhiteSpace(payloadPath))
+                {
+                    logger.Error("Payload path is required for install or repair.");
+                    return 4;
+                }
+
+                if (!silent)
+                {
+                    logger.Info("Running Setup in headless mode (no UI).");
+                }
+
                 var result = Task.Run(() =>
-                    SetupOperations.RunAsync(action.Value, manifestUrl, logger, null, default)).GetAwaiter().GetResult();
+                    SetupOperations.RunAsync(action.Value, payloadPath, stopWait, logger, null, default)).GetAwaiter().GetResult();
 
                 if (result.Success && action.Value != SetupAction.Uninstall)
                 {
@@ -55,6 +70,11 @@ static class Program
 
     private static SetupAction? GetAction(string[] args)
     {
+        if (args.Length > 0 && !args[0].StartsWith("-", StringComparison.OrdinalIgnoreCase))
+        {
+            return ParseVerb(args[0]);
+        }
+
         if (HasArg(args, "--install") || HasArg(args, "/install"))
         {
             return SetupAction.Install;
@@ -62,7 +82,7 @@ static class Program
 
         if (HasArg(args, "--update") || HasArg(args, "/update"))
         {
-            return SetupAction.Update;
+            return SetupAction.Repair;
         }
 
         if (HasArg(args, "--uninstall") || HasArg(args, "/uninstall"))
@@ -91,6 +111,48 @@ static class Program
         }
 
         return null;
+    }
+
+    private static SetupAction? ParseVerb(string verb)
+    {
+        if (string.Equals(verb, "install", StringComparison.OrdinalIgnoreCase))
+        {
+            return SetupAction.Install;
+        }
+
+        if (string.Equals(verb, "repair", StringComparison.OrdinalIgnoreCase))
+        {
+            return SetupAction.Repair;
+        }
+
+        if (string.Equals(verb, "uninstall", StringComparison.OrdinalIgnoreCase))
+        {
+            return SetupAction.Uninstall;
+        }
+
+        if (string.Equals(verb, "register-shortcuts", StringComparison.OrdinalIgnoreCase))
+        {
+            return SetupAction.RegisterShortcuts;
+        }
+
+        if (string.Equals(verb, "stop-app", StringComparison.OrdinalIgnoreCase))
+        {
+            return SetupAction.StopApp;
+        }
+
+        return null;
+    }
+
+    private static TimeSpan? TryParseWait(string? waitMsValue)
+    {
+        if (string.IsNullOrWhiteSpace(waitMsValue))
+        {
+            return null;
+        }
+
+        return int.TryParse(waitMsValue, out var ms) && ms > 0
+            ? TimeSpan.FromMilliseconds(ms)
+            : null;
     }
 
     private static void LaunchInstalledApp()
