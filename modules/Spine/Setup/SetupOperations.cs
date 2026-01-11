@@ -552,30 +552,13 @@ public static class SetupOperations
 
     private static string[] ResolveDesktopDirectories()
     {
-        var list = new List<string>();
-        var oneDrive = Environment.GetEnvironmentVariable("OneDrive");
-        if (!string.IsNullOrWhiteSpace(oneDrive))
-        {
-            var oneDriveDesktop = Path.Combine(oneDrive, "Desktop");
-            if (Directory.Exists(oneDriveDesktop))
-            {
-                list.Add(oneDriveDesktop);
-            }
-        }
-
         var userDesktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
         if (!string.IsNullOrWhiteSpace(userDesktop))
         {
-            list.Add(userDesktop);
+            return new[] { userDesktop };
         }
 
-        var publicDesktop = Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory);
-        if (!string.IsNullOrWhiteSpace(publicDesktop))
-        {
-            list.Add(publicDesktop);
-        }
-
-        return list.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        return Array.Empty<string>();
     }
 
     private static bool HasValidShortcut(IEnumerable<string> locations, string exePath, SetupLogger logger)
