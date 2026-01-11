@@ -65,7 +65,7 @@ foreach ($path in $pathsToRemove) {
                 Remove-Item -Path $path -Recurse -Force -ErrorAction Continue
                 Write-Log "Removed $path"
             } catch {
-                Write-Log "Failed to remove $path: $($_.Exception.Message)" "WARN"
+                Write-Log "Failed to remove ${path}: $($_.Exception.Message)" "WARN"
             }
         }
     } else {
@@ -85,7 +85,7 @@ foreach ($shortcut in $shortcuts) {
                 Remove-Item -Path $shortcut -Force -ErrorAction Continue
                 Write-Log "Removed shortcut $shortcut"
             } catch {
-                Write-Log "Failed to remove shortcut $shortcut: $($_.Exception.Message)" "WARN"
+                Write-Log "Failed to remove shortcut ${shortcut}: $($_.Exception.Message)" "WARN"
             }
         }
     } else {
@@ -105,7 +105,7 @@ foreach ($dir in $startMenuDirs) {
                 Remove-Item -Path $dir -Recurse -Force -ErrorAction Continue
                 Write-Log "Removed Start Menu folder $dir"
             } catch {
-                Write-Log "Failed to remove Start Menu folder $dir: $($_.Exception.Message)" "WARN"
+                Write-Log "Failed to remove Start Menu folder ${dir}: $($_.Exception.Message)" "WARN"
             }
         }
     } else {
