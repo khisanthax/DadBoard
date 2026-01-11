@@ -302,8 +302,11 @@ sealed class TrayAppContext : ApplicationContext
         _disableLeaderItem.Enabled = leaderEnabled;
         _openDashboardItem.Enabled = leaderEnabled;
         var installed = Installer.IsInstalled();
-        _installItem.Text = installed ? "Reinstall (Admin)" : "Install (Admin)";
+        _installItem.Text = installed ? "Repair / Reinstall (Admin)" : "Install (Admin)";
         _installItem.Enabled = true;
+
+        var setupExists = File.Exists(DadBoardPaths.SetupExePath);
+        _runSetupItem.Text = setupExists ? "Update / Run Setup..." : "Download & Run Setup...";
     }
 
     private async System.Threading.Tasks.Task RunSetupAsync()

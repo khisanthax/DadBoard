@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text.Json;
@@ -77,7 +78,7 @@ static class Installer
         if (!RunStep(tracker, logger, InstallSteps.CopyExe, "Copying DadBoard.exe", () =>
         {
             StopOtherInstances(logger, installerParentPid);
-            CopySelf();
+            CopySelf(logger);
         }))
         {
             return false;
@@ -149,7 +150,7 @@ static class Installer
         }
     }
 
-    private static void CopySelf()
+    private static void CopySelf(InstallLogger logger)
     {
         var exePath = Process.GetCurrentProcess().MainModule?.FileName;
         if (string.IsNullOrEmpty(exePath))
@@ -158,6 +159,10 @@ static class Installer
         }
 
         Directory.CreateDirectory(DadBoardPaths.InstallDir);
+        if (!WaitForFileUnlock(DadBoardPaths.InstalledExePath, TimeSpan.FromSeconds(30), logger))
+        {
+            throw new IOException("DadBoard.exe did not release file lock after shutdown/kill.");
+        }
         File.Copy(exePath, DadBoardPaths.InstalledExePath, true);
     }
 
@@ -200,11 +205,54 @@ static class Installer
                     logger.Error($"Failed to stop DadBoard.exe PID {proc.Id}: {ex.Message}");
                 }
             }
+
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            while (DateTime.UtcNow < deadline)
+            {
+                var remaining = Process.GetProcessesByName("DadBoard")
+                    .Any(p => p.Id != currentId && (!installerParentPid.HasValue || p.Id != installerParentPid.Value));
+                if (!remaining)
+                {
+                    logger.Info("All other DadBoard processes exited.");
+                    return;
+                }
+
+                logger.Info("Waiting for DadBoard.exe to exit...");
+                System.Threading.Thread.Sleep(500);
+            }
+
+            logger.Error("DadBoard.exe did not exit within timeout.");
         }
         catch (Exception ex)
         {
             logger.Error($"Failed to enumerate running DadBoard.exe: {ex.Message}");
         }
+    }
+
+    private static bool WaitForFileUnlock(string path, TimeSpan timeout, InstallLogger logger)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            return true;
+        }
+
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                logger.Info("DadBoard.exe file lock released.");
+                return true;
+            }
+            catch
+            {
+                logger.Info("Waiting for DadBoard.exe file lock to release...");
+                System.Threading.Thread.Sleep(500);
+            }
+        }
+
+        return false;
     }
 
     private static void EnsureDataDirsAndConfigs(InstallLogger logger)
