@@ -4,6 +4,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
+using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
@@ -517,29 +518,31 @@ public static class SetupOperations
     {
         try
         {
-            var desktopDir = ResolveDesktopDirectory();
-            if (string.IsNullOrWhiteSpace(desktopDir))
+            var exePath = DadBoardPaths.InstalledExePath;
+            if (!File.Exists(exePath))
+            {
+                logger.Warn($"Desktop shortcut skipped: target missing {exePath}");
+                return;
+            }
+
+            var locations = ResolveDesktopDirectories();
+            if (locations.Length == 0)
             {
                 logger.Warn("Desktop shortcut skipped: no desktop directory found.");
                 return;
             }
 
-            Directory.CreateDirectory(desktopDir);
-            var shortcutPath = Path.Combine(desktopDir, "DadBoard.lnk");
-            var shellType = Type.GetTypeFromProgID("WScript.Shell");
-            if (shellType == null)
+            if (HasValidShortcut(locations, exePath, logger))
             {
-                logger.Warn("Desktop shortcut skipped: WScript.Shell unavailable.");
+                logger.Info("Desktop shortcut already valid.");
                 return;
             }
 
-            dynamic shell = Activator.CreateInstance(shellType)!;
-            dynamic shortcut = shell.CreateShortcut(shortcutPath);
-            shortcut.TargetPath = DadBoardPaths.InstalledExePath;
-            shortcut.WorkingDirectory = DadBoardPaths.InstallDir;
-            shortcut.IconLocation = DadBoardPaths.InstalledExePath;
-            shortcut.Save();
-            logger.Info($"Desktop shortcut created at {shortcutPath}");
+            var preferred = locations[0];
+            Directory.CreateDirectory(preferred);
+            var shortcutPath = Path.Combine(preferred, "DadBoard.lnk");
+            WriteShortcut(shortcutPath, exePath, logger);
+            logger.Info($"Desktop shortcut created/updated at {shortcutPath}");
         }
         catch (Exception ex)
         {
@@ -547,19 +550,100 @@ public static class SetupOperations
         }
     }
 
-    private static string ResolveDesktopDirectory()
+    private static string[] ResolveDesktopDirectories()
     {
+        var list = new List<string>();
         var oneDrive = Environment.GetEnvironmentVariable("OneDrive");
         if (!string.IsNullOrWhiteSpace(oneDrive))
         {
             var oneDriveDesktop = Path.Combine(oneDrive, "Desktop");
             if (Directory.Exists(oneDriveDesktop))
             {
-                return oneDriveDesktop;
+                list.Add(oneDriveDesktop);
             }
         }
 
-        return Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        var userDesktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        if (!string.IsNullOrWhiteSpace(userDesktop))
+        {
+            list.Add(userDesktop);
+        }
+
+        var publicDesktop = Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory);
+        if (!string.IsNullOrWhiteSpace(publicDesktop))
+        {
+            list.Add(publicDesktop);
+        }
+
+        return list.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static bool HasValidShortcut(IEnumerable<string> locations, string exePath, SetupLogger logger)
+    {
+        foreach (var location in locations)
+        {
+            var shortcutPath = Path.Combine(location, "DadBoard.lnk");
+            if (!File.Exists(shortcutPath))
+            {
+                continue;
+            }
+
+            if (TryReadShortcutTarget(shortcutPath, out var target))
+            {
+                if (string.Equals(Path.GetFullPath(target), Path.GetFullPath(exePath), StringComparison.OrdinalIgnoreCase) &&
+                    File.Exists(target))
+                {
+                    return true;
+                }
+
+                logger.Warn($"Desktop shortcut invalid at {shortcutPath}; target={target}");
+            }
+            else
+            {
+                logger.Warn($"Desktop shortcut unreadable at {shortcutPath}");
+            }
+        }
+
+        return false;
+    }
+
+    private static void WriteShortcut(string shortcutPath, string exePath, SetupLogger logger)
+    {
+        var shellType = Type.GetTypeFromProgID("WScript.Shell");
+        if (shellType == null)
+        {
+            logger.Warn("Desktop shortcut skipped: WScript.Shell unavailable.");
+            return;
+        }
+
+        dynamic shell = Activator.CreateInstance(shellType)!;
+        dynamic shortcut = shell.CreateShortcut(shortcutPath);
+        shortcut.TargetPath = exePath;
+        shortcut.WorkingDirectory = DadBoardPaths.InstallDir;
+        shortcut.IconLocation = exePath;
+        shortcut.Save();
+    }
+
+    private static bool TryReadShortcutTarget(string shortcutPath, out string targetPath)
+    {
+        targetPath = "";
+        try
+        {
+            var shellType = Type.GetTypeFromProgID("WScript.Shell");
+            if (shellType == null)
+            {
+                return false;
+            }
+
+            dynamic shell = Activator.CreateInstance(shellType)!;
+            dynamic shortcut = shell.CreateShortcut(shortcutPath);
+            targetPath = shortcut.TargetPath as string ?? "";
+            return !string.IsNullOrWhiteSpace(targetPath);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static void SignalShutdown(SetupLogger logger)
