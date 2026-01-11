@@ -13,6 +13,7 @@ public static class UpdateConfigStore
         "https://github.com/khisanthax/DadBoard/releases/download/nightly/latest.json";
 
     public static UpdateChannel DefaultChannel => UpdateChannel.Nightly;
+    public static UpdateSourceMode DefaultSourceMode => UpdateSourceMode.Auto;
 
     public static string GetDefaultManifestUrl(UpdateChannel channel)
         => channel == UpdateChannel.Stable ? DefaultStableManifestUrl : DefaultNightlyManifestUrl;
@@ -77,6 +78,11 @@ public static class UpdateConfigStore
         if (!Enum.IsDefined(typeof(UpdateChannel), config.UpdateChannel))
         {
             config.UpdateChannel = DefaultChannel;
+        }
+
+        if (!Enum.IsDefined(typeof(UpdateSourceMode), config.UpdateSourceMode))
+        {
+            config.UpdateSourceMode = DefaultSourceMode;
         }
 
         if (config.MirrorPollMinutes <= 0)

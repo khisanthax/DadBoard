@@ -60,8 +60,9 @@ public static class SetupOperations
                 return new SetupResult { Success = true };
             }
 
-            var resolvedManifestUrl = ResolveManifestUrl(manifestUrl, logger);
-            if (string.IsNullOrWhiteSpace(resolvedManifestUrl))
+            var config = UpdateConfigStore.Load();
+            var (primaryManifestUrl, fallbackManifestUrl) = ResolveManifestUrls(manifestUrl, config, logger);
+            if (string.IsNullOrWhiteSpace(primaryManifestUrl) && string.IsNullOrWhiteSpace(fallbackManifestUrl))
             {
                 return new SetupResult
                 {
@@ -71,9 +72,8 @@ public static class SetupOperations
             }
 
             progress?.Report("Fetching update manifest...");
-            var fallbackManifestUrl = UpdateConfigStore.GetDefaultManifestUrl(UpdateConfigStore.Load().UpdateChannel);
             var (manifest, manifestError, usedManifestUrl) =
-                await LoadManifestWithFallbackAsync(resolvedManifestUrl, fallbackManifestUrl, logger, cancellationToken)
+                await LoadManifestWithFallbackAsync(primaryManifestUrl, fallbackManifestUrl, logger, cancellationToken)
                     .ConfigureAwait(false);
             if (manifest == null || string.IsNullOrWhiteSpace(manifest.PackageUrl))
             {
@@ -112,11 +112,10 @@ public static class SetupOperations
             logger.Info("Applying package.");
             ApplyPackage(packageFile, logger);
 
-            var config = UpdateConfigStore.Load();
             var defaultUrl = UpdateConfigStore.GetDefaultManifestUrl(config.UpdateChannel);
-            config.ManifestUrl = string.Equals(usedManifestUrl ?? resolvedManifestUrl, defaultUrl, StringComparison.OrdinalIgnoreCase)
+            config.ManifestUrl = string.Equals(usedManifestUrl ?? primaryManifestUrl, defaultUrl, StringComparison.OrdinalIgnoreCase)
                 ? ""
-                : usedManifestUrl ?? resolvedManifestUrl;
+                : usedManifestUrl ?? primaryManifestUrl;
             config.Source = "github_mirror";
             config.MirrorEnabled = true;
             UpdateConfigStore.Save(config);
@@ -154,6 +153,38 @@ public static class SetupOperations
         }
 
         return "";
+    }
+
+    private static (string Primary, string Fallback) ResolveManifestUrls(
+        string? manifestUrl,
+        UpdateConfig config,
+        SetupLogger logger)
+    {
+        var resolved = UpdateConfigStore.ResolveManifestUrl(config);
+        if (config.UpdateSourceMode == UpdateSourceMode.GithubOnly)
+        {
+            logger.Info("Update source mode: GithubOnly");
+            return (resolved, "");
+        }
+
+        var primary = !string.IsNullOrWhiteSpace(manifestUrl)
+            ? manifestUrl
+            : BuildLocalLeaderManifestUrl(config);
+        var fallback = resolved;
+        if (string.Equals(primary, fallback, StringComparison.OrdinalIgnoreCase))
+        {
+            fallback = "";
+        }
+
+        logger.Info($"Update source mode: Auto primary={primary} fallback={fallback}");
+        return (primary, fallback);
+    }
+
+    private static string BuildLocalLeaderManifestUrl(UpdateConfig config)
+    {
+        var host = string.IsNullOrWhiteSpace(config.LocalHostIp) ? "127.0.0.1" : config.LocalHostIp;
+        var port = config.LocalHostPort > 0 ? config.LocalHostPort : 45555;
+        return $"http://{host}:{port}/updates/latest.json";
     }
 
     private static async Task<UpdateManifest?> LoadManifestAsync(string manifestUrl, SetupLogger logger, CancellationToken ct)
@@ -391,8 +422,7 @@ public static class SetupOperations
             throw new FileNotFoundException("Package not found.", packagePath);
         }
 
-        SignalShutdown(logger);
-        WaitForAppExit(TimeSpan.FromSeconds(10), logger);
+        StopDadBoardProcesses(logger, TimeSpan.FromSeconds(30));
 
         var stagingDir = Path.Combine(DadBoardPaths.UpdateSourceDir, "staging_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(stagingDir);
@@ -413,9 +443,10 @@ public static class SetupOperations
             logger.Info($"Backed up existing exe to {backup}");
         }
 
-        CopyDirectory(stagingDir, DadBoardPaths.InstallDir);
+        CopyDirectoryWithRetries(stagingDir, DadBoardPaths.InstallDir, logger);
         CopySetupIntoInstallDir(logger);
         CreateDesktopShortcut(logger);
+        RestartDadBoard(logger);
 
         try
         {
@@ -483,6 +514,138 @@ public static class SetupOperations
             var targetPath = file.Replace(sourceDir, destinationDir, StringComparison.OrdinalIgnoreCase);
             Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
             File.Copy(file, targetPath, true);
+        }
+    }
+
+    private static void CopyDirectoryWithRetries(string sourceDir, string destinationDir, SetupLogger logger)
+    {
+        const int attempts = 5;
+        for (var i = 1; i <= attempts; i++)
+        {
+            try
+            {
+                logger.Info($"Replacing files (attempt {i}/{attempts})...");
+                CopyDirectory(sourceDir, destinationDir);
+                logger.Info("Replace succeeded.");
+                return;
+            }
+            catch (Exception ex)
+            {
+                logger.Warn($"Replace failed (attempt {i}/{attempts}): {ex.Message}");
+                Thread.Sleep(300);
+            }
+        }
+
+        throw new IOException("DadBoard files are still locked. Ensure the app is closed and retry.");
+    }
+
+    private static void StopDadBoardProcesses(SetupLogger logger, TimeSpan timeout)
+    {
+        logger.Info("Stopping DadBoard...");
+        var processes = GetDadBoardProcesses();
+        if (processes.Count == 0)
+        {
+            logger.Info("No running DadBoard processes found.");
+            return;
+        }
+
+        var pids = string.Join(",", processes.Select(p => p.Id));
+        logger.Info($"DadBoard PIDs: {pids}");
+
+        SignalShutdown(logger);
+        foreach (var process in processes)
+        {
+            try
+            {
+                if (process.MainWindowHandle != IntPtr.Zero)
+                {
+                    process.CloseMainWindow();
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (GetDadBoardProcesses().Count == 0)
+            {
+                logger.Info("DadBoard stopped gracefully.");
+                return;
+            }
+
+            Thread.Sleep(500);
+        }
+
+        logger.Warn("Graceful shutdown timed out; forcing termination.");
+        foreach (var process in GetDadBoardProcesses())
+        {
+            try
+            {
+                process.Kill(true);
+                logger.Warn($"Force kill applied pid={process.Id}");
+            }
+            catch (Exception ex)
+            {
+                logger.Warn($"Force kill failed pid={process.Id}: {ex.Message}");
+            }
+        }
+
+        Thread.Sleep(1000);
+        if (GetDadBoardProcesses().Count > 0)
+        {
+            logger.Warn("DadBoard still running after force kill.");
+        }
+    }
+
+    private static List<Process> GetDadBoardProcesses()
+    {
+        var list = new List<Process>();
+        foreach (var process in Process.GetProcessesByName("DadBoard"))
+        {
+            try
+            {
+                var path = process.MainModule?.FileName ?? "";
+                if (string.IsNullOrWhiteSpace(path) ||
+                    string.Equals(Path.GetFullPath(path), Path.GetFullPath(DadBoardPaths.InstalledExePath), StringComparison.OrdinalIgnoreCase))
+                {
+                    list.Add(process);
+                }
+            }
+            catch
+            {
+                list.Add(process);
+            }
+        }
+
+        return list;
+    }
+
+    private static void RestartDadBoard(SetupLogger logger)
+    {
+        var exePath = DadBoardPaths.InstalledExePath;
+        if (!File.Exists(exePath))
+        {
+            logger.Warn($"Restart skipped: {exePath} missing.");
+            return;
+        }
+
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = exePath,
+                WorkingDirectory = DadBoardPaths.InstallDir,
+                UseShellExecute = true
+            };
+            Process.Start(startInfo);
+            logger.Info("DadBoard restarted.");
+        }
+        catch (Exception ex)
+        {
+            logger.Warn($"DadBoard restart failed: {ex.Message}");
         }
     }
 

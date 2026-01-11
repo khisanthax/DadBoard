@@ -13,6 +13,9 @@ public sealed class UpdateConfig
     [JsonPropertyName("update_channel")]
     public UpdateChannel UpdateChannel { get; set; } = UpdateChannel.Nightly;
 
+    [JsonPropertyName("source_mode")]
+    public UpdateSourceMode UpdateSourceMode { get; set; } = UpdateSourceMode.Auto;
+
     [JsonPropertyName("mirror_enabled")]
     public bool MirrorEnabled { get; set; }
 

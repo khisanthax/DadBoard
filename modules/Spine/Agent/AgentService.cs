@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Concurrent;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
@@ -46,6 +47,7 @@ public sealed class AgentService : IDisposable
     private UpdateState _updateState = new();
     private UpdateConfig _updateConfig = new();
     private bool _updateConfigLoaded;
+    private bool _lastUpdateCanceled;
     private string _updateConfigError = "";
     private readonly TimeSpan _updateConfigTimeout = TimeSpan.FromSeconds(2);
     private readonly TimeSpan _manifestTimeout = TimeSpan.FromSeconds(5);
@@ -518,6 +520,7 @@ public sealed class AgentService : IDisposable
 
     private async Task CheckForUpdatesAsync(bool force, string? manifestOverride)
     {
+        _lastUpdateCanceled = false;
         if (_updateState.UpdatesDisabled && !force)
         {
             _logger.Warn("Updates disabled due to repeated failures.");
@@ -590,6 +593,12 @@ public sealed class AgentService : IDisposable
 
             var updateUrl = usedUrl ?? primaryUrl;
             var ok = await RunSetupUpdateAsync(updateUrl).ConfigureAwait(false);
+            if (!ok && _lastUpdateCanceled)
+            {
+                _logger.Warn("Update canceled by user; not retrying or tripping breaker.");
+                return;
+            }
+
             if (!ok && !string.IsNullOrWhiteSpace(fallbackUrl) &&
                 !string.Equals(updateUrl, fallbackUrl, StringComparison.OrdinalIgnoreCase))
             {
@@ -605,6 +614,12 @@ public sealed class AgentService : IDisposable
 
             if (!ok)
             {
+                if (_lastUpdateCanceled)
+                {
+                    _logger.Warn("Update canceled by user; not tripping breaker.");
+                    return;
+                }
+
                 RegisterUpdateFailure("Updater failed.");
                 return;
             }
@@ -759,6 +774,17 @@ public sealed class AgentService : IDisposable
         try
         {
             process = Process.Start(startInfo);
+        }
+        catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
+        {
+            _lastUpdateCanceled = true;
+            var message = "Update canceled by user (UAC/consent).";
+            _updateState.LastResult = "canceled";
+            _updateState.LastError = message;
+            UpdateStateStore.Save(_updateState);
+            SendUpdateStatus("failed", message);
+            _logger.Warn($"Updater launch canceled by user: {ex.Message}");
+            return false;
         }
         catch (Exception ex)
         {

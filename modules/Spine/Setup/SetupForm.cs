@@ -24,6 +24,7 @@ public sealed class SetupForm : Form
     private readonly TextBox _manifestUrlInput = new();
     private readonly TextBox _localHostIpInput = new();
     private readonly ComboBox _channelCombo = new();
+    private readonly ComboBox _sourceModeCombo = new();
     private readonly Button _saveUpdateConfigButton = new();
     private readonly Button _resetUpdateConfigButton = new();
     private readonly Label _updateStatusLabel = new();
@@ -303,6 +304,13 @@ public sealed class SetupForm : Form
             TextAlign = ContentAlignment.MiddleLeft
         };
 
+        var modeLabel = new Label
+        {
+            Text = "Update Source Mode",
+            AutoSize = true,
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+
         var manifestLabel = new Label
         {
             Text = "Manifest URL",
@@ -322,6 +330,11 @@ public sealed class SetupForm : Form
         _channelCombo.Items.Add("Stable");
         _channelCombo.Width = 220;
 
+        _sourceModeCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+        _sourceModeCombo.Items.Add("Auto (Leader mirror, fallback GitHub)");
+        _sourceModeCombo.Items.Add("GitHub only");
+        _sourceModeCombo.Width = 260;
+
         _manifestUrlInput.Width = 420;
         _localHostIpInput.Width = 140;
         _saveUpdateConfigButton.Text = "Save";
@@ -336,6 +349,8 @@ public sealed class SetupForm : Form
 
         panel.Controls.Add(channelLabel);
         panel.Controls.Add(_channelCombo);
+        panel.Controls.Add(modeLabel);
+        panel.Controls.Add(_sourceModeCombo);
         panel.Controls.Add(manifestLabel);
         panel.Controls.Add(_manifestUrlInput);
         panel.Controls.Add(hostLabel);
@@ -351,6 +366,7 @@ public sealed class SetupForm : Form
     {
         var config = UpdateConfigStore.Load();
         _channelCombo.SelectedIndex = config.UpdateChannel == UpdateChannel.Stable ? 1 : 0;
+        _sourceModeCombo.SelectedIndex = config.UpdateSourceMode == UpdateSourceMode.GithubOnly ? 1 : 0;
         _manifestUrlInput.Text = UpdateConfigStore.ResolveManifestUrl(config);
         _localHostIpInput.Text = config.LocalHostIp;
         _updateStatusLabel.Text = GetUpdateSourceStatus(config);
@@ -362,6 +378,7 @@ public sealed class SetupForm : Form
         var hostIp = _localHostIpInput.Text.Trim();
         var config = UpdateConfigStore.Load();
         config.UpdateChannel = _channelCombo.SelectedIndex == 1 ? UpdateChannel.Stable : UpdateChannel.Nightly;
+        config.UpdateSourceMode = _sourceModeCombo.SelectedIndex == 1 ? UpdateSourceMode.GithubOnly : UpdateSourceMode.Auto;
         var defaultUrl = UpdateConfigStore.GetDefaultManifestUrl(config.UpdateChannel);
         config.ManifestUrl = string.Equals(url, defaultUrl, StringComparison.OrdinalIgnoreCase) ? "" : url;
         config.LocalHostIp = hostIp;
@@ -376,6 +393,7 @@ public sealed class SetupForm : Form
     {
         var config = UpdateConfigStore.Load();
         config.UpdateChannel = _channelCombo.SelectedIndex == 1 ? UpdateChannel.Stable : UpdateChannel.Nightly;
+        config.UpdateSourceMode = _sourceModeCombo.SelectedIndex == 1 ? UpdateSourceMode.GithubOnly : UpdateSourceMode.Auto;
         config.ManifestUrl = "";
         config.LocalHostIp = "";
         config.Source = "github_mirror";
@@ -393,6 +411,11 @@ public sealed class SetupForm : Form
         if (string.IsNullOrWhiteSpace(resolved))
         {
             return "Not configured";
+        }
+
+        if (config.UpdateSourceMode == UpdateSourceMode.GithubOnly)
+        {
+            return "Configured: GitHub Only";
         }
 
         if (config.MirrorEnabled && string.Equals(config.Source, "github_mirror", StringComparison.OrdinalIgnoreCase))
