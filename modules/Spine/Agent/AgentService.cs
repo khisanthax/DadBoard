@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
@@ -365,6 +366,29 @@ public sealed class AgentService : IDisposable
             return;
         }
 
+        if (envelope.Type == ProtocolConstants.TypeCommandRunSetupUpdate)
+        {
+            var command = envelope.Payload.Deserialize<RunSetupUpdateCommand>(JsonUtil.Options);
+            if (command == null)
+            {
+                SendAck(socket, envelope.CorrelationId, ok: false, "Invalid payload");
+                return;
+            }
+
+            _state.LastCommandId = envelope.CorrelationId;
+            _state.LastCommandType = envelope.Type;
+            _state.LastCommandTs = DateTime.UtcNow.ToString("O");
+
+            _ = Task.Run(async () =>
+            {
+                SendAck(socket, envelope.CorrelationId, ok: true, null);
+                SendUpdateStatus("starting_update", "Update requested.");
+                _logger.Info("Update requested via RunSetupUpdate command.");
+                await CheckForUpdatesAsync(force: true, manifestOverride: command.ManifestUrl).ConfigureAwait(false);
+            });
+            return;
+        }
+
         if (envelope.Type == ProtocolConstants.TypeCommandResetUpdateFailures)
         {
             var command = envelope.Payload.Deserialize<ResetUpdateFailuresCommand>(JsonUtil.Options);
@@ -592,7 +616,7 @@ public sealed class AgentService : IDisposable
             _logger.Info($"Update check starting. current={current} latest={latest} tokenChanged={tokenChanged}");
 
             var updateUrl = usedUrl ?? primaryUrl;
-            var ok = await RunSetupUpdateAsync(updateUrl).ConfigureAwait(false);
+            var ok = await RunSetupUpdateAsync(updateUrl, fallbackUrl).ConfigureAwait(false);
             if (!ok && _lastUpdateCanceled)
             {
                 _logger.Warn("Update canceled by user; not retrying or tripping breaker.");
@@ -604,7 +628,7 @@ public sealed class AgentService : IDisposable
             {
                 _logger.Warn($"Update failed via primary manifest; retrying fallback {fallbackUrl}");
                 SendUpdateStatus("downloading", "Primary update failed; retrying fallback.");
-                ok = await RunSetupUpdateAsync(fallbackUrl).ConfigureAwait(false);
+                ok = await RunSetupUpdateAsync(fallbackUrl, "").ConfigureAwait(false);
                 if (ok)
                 {
                     _updateState.ManifestUrl = fallbackUrl;
@@ -747,14 +771,20 @@ public sealed class AgentService : IDisposable
         return "";
     }
 
-    private async Task<bool> RunSetupUpdateAsync(string manifestUrl)
+    private async Task<bool> RunSetupUpdateAsync(string manifestUrl, string fallbackManifestUrl)
     {
         var setupExe = DadBoardPaths.SetupExePath;
         if (!File.Exists(setupExe))
         {
-            SendUpdateStatus("failed", $"Updater not found: {setupExe}");
-            _logger.Warn($"Update skipped: {setupExe} missing.");
-            return false;
+            _logger.Warn($"Updater missing: {setupExe}. Attempting download.");
+            SendUpdateStatus("downloading", "Downloading updater.");
+            var downloaded = await EnsureSetupPresentAsync(manifestUrl, fallbackManifestUrl).ConfigureAwait(false);
+            if (!downloaded || !File.Exists(setupExe))
+            {
+                SendUpdateStatus("failed", $"Updater not found: {setupExe}");
+                _logger.Warn($"Update skipped: {setupExe} missing after download attempt.");
+                return false;
+            }
         }
 
         SendUpdateStatus("downloading", "Starting updater.");
@@ -812,6 +842,112 @@ public sealed class AgentService : IDisposable
         SendUpdateStatus("restarting", "Restarting DadBoard.");
         _logger.Info("Updater finished; requesting shutdown.");
         ShutdownRequested?.Invoke();
+        return true;
+    }
+
+    private async Task<bool> EnsureSetupPresentAsync(string primaryManifestUrl, string fallbackManifestUrl)
+    {
+        var setupExe = DadBoardPaths.SetupExePath;
+        var candidates = new[]
+        {
+            primaryManifestUrl,
+            fallbackManifestUrl
+        }.Where(url => !string.IsNullOrWhiteSpace(url))
+         .Distinct(StringComparer.OrdinalIgnoreCase)
+         .ToArray();
+
+        foreach (var manifestUrl in candidates)
+        {
+            if (TryResolveLocalSetupPath(manifestUrl, out var localPath))
+            {
+                try
+                {
+                    File.Copy(localPath, setupExe, true);
+                    _logger.Info($"Updater copied from {localPath}");
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    _logger.Warn($"Updater copy failed: {ex.Message}");
+                }
+            }
+
+            if (TryBuildSetupUrl(manifestUrl, out var setupUrl))
+            {
+                try
+                {
+                    _logger.Info($"Downloading updater from {setupUrl}");
+                    var bytes = await _httpClient.GetByteArrayAsync(setupUrl, _cts.Token).ConfigureAwait(false);
+                    Directory.CreateDirectory(Path.GetDirectoryName(setupExe)!);
+                    await File.WriteAllBytesAsync(setupExe, bytes, _cts.Token).ConfigureAwait(false);
+                    _logger.Info($"Updater downloaded to {setupExe}");
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    _logger.Warn($"Updater download failed: {ex.Message}");
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryResolveLocalSetupPath(string manifestUrl, out string localPath)
+    {
+        localPath = "";
+        if (File.Exists(manifestUrl))
+        {
+            var dir = Path.GetDirectoryName(manifestUrl);
+            if (!string.IsNullOrWhiteSpace(dir))
+            {
+                var candidate = Path.Combine(dir, "DadBoardSetup.exe");
+                if (File.Exists(candidate))
+                {
+                    localPath = candidate;
+                    return true;
+                }
+            }
+        }
+
+        if (Uri.TryCreate(manifestUrl, UriKind.Absolute, out var uri) && uri.IsFile)
+        {
+            var dir = Path.GetDirectoryName(uri.LocalPath);
+            if (!string.IsNullOrWhiteSpace(dir))
+            {
+                var candidate = Path.Combine(dir, "DadBoardSetup.exe");
+                if (File.Exists(candidate))
+                {
+                    localPath = candidate;
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryBuildSetupUrl(string manifestUrl, out string setupUrl)
+    {
+        setupUrl = "";
+        if (!Uri.TryCreate(manifestUrl, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        if (!string.Equals(uri.Scheme, "http", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(uri.Scheme, "https", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (!uri.AbsolutePath.EndsWith("/latest.json", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var baseUrl = manifestUrl.Substring(0, manifestUrl.Length - "latest.json".Length);
+        setupUrl = baseUrl + "DadBoardSetup.exe";
         return true;
     }
 

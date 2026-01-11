@@ -422,7 +422,10 @@ public static class SetupOperations
             throw new FileNotFoundException("Package not found.", packagePath);
         }
 
-        StopDadBoardProcesses(logger, TimeSpan.FromSeconds(30));
+        if (!StopDadBoardProcesses(logger, TimeSpan.FromSeconds(30)))
+        {
+            throw new IOException("DadBoard.exe did not release file lock after shutdown/kill.");
+        }
 
         var stagingDir = Path.Combine(DadBoardPaths.UpdateSourceDir, "staging_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(stagingDir);
@@ -539,20 +542,21 @@ public static class SetupOperations
         throw new IOException("DadBoard files are still locked. Ensure the app is closed and retry.");
     }
 
-    private static void StopDadBoardProcesses(SetupLogger logger, TimeSpan timeout)
+    private static bool StopDadBoardProcesses(SetupLogger logger, TimeSpan timeout)
     {
         logger.Info("Stopping DadBoard...");
         var processes = GetDadBoardProcesses();
         if (processes.Count == 0)
         {
             logger.Info("No running DadBoard processes found.");
-            return;
+            return true;
         }
 
         var pids = string.Join(",", processes.Select(p => p.Id));
         logger.Info($"DadBoard PIDs: {pids}");
 
         SignalShutdown(logger);
+        logger.Info("Graceful shutdown requested.");
         foreach (var process in processes)
         {
             try
@@ -573,31 +577,62 @@ public static class SetupOperations
             if (GetDadBoardProcesses().Count == 0)
             {
                 logger.Info("DadBoard stopped gracefully.");
-                return;
+                break;
             }
 
             Thread.Sleep(500);
         }
 
-        logger.Warn("Graceful shutdown timed out; forcing termination.");
-        foreach (var process in GetDadBoardProcesses())
+        if (GetDadBoardProcesses().Count > 0)
         {
-            try
+            logger.Warn("Graceful shutdown timed out; forcing termination.");
+            foreach (var process in GetDadBoardProcesses())
             {
-                process.Kill(true);
-                logger.Warn($"Force kill applied pid={process.Id}");
-            }
-            catch (Exception ex)
-            {
-                logger.Warn($"Force kill failed pid={process.Id}: {ex.Message}");
+                try
+                {
+                    process.Kill(true);
+                    logger.Warn($"Force kill applied pid={process.Id}");
+                }
+                catch (Exception ex)
+                {
+                    logger.Warn($"Force kill failed pid={process.Id}: {ex.Message}");
+                }
             }
         }
 
-        Thread.Sleep(1000);
-        if (GetDadBoardProcesses().Count > 0)
+        if (!WaitForFileUnlock(DadBoardPaths.InstalledExePath, TimeSpan.FromSeconds(5), logger))
         {
-            logger.Warn("DadBoard still running after force kill.");
+            logger.Warn("DadBoard.exe did not release file lock after shutdown/kill.");
+            return false;
         }
+
+        logger.Info("File lock released.");
+        return true;
+    }
+
+    private static bool WaitForFileUnlock(string path, TimeSpan timeout, SetupLogger logger)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            return true;
+        }
+
+        logger.Info("Waiting for DadBoard.exe to exit...");
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                return true;
+            }
+            catch
+            {
+                Thread.Sleep(250);
+            }
+        }
+
+        return false;
     }
 
     private static List<Process> GetDadBoardProcesses()
@@ -715,10 +750,11 @@ public static class SetupOperations
 
     private static string[] ResolveDesktopDirectories()
     {
-        var userDesktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-        if (!string.IsNullOrWhiteSpace(userDesktop))
+        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (!string.IsNullOrWhiteSpace(userProfile))
         {
-            return new[] { userDesktop };
+            var localDesktop = Path.Combine(userProfile, "Desktop");
+            return new[] { localDesktop };
         }
 
         return Array.Empty<string>();
