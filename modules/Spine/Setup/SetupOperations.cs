@@ -448,6 +448,7 @@ public static class SetupOperations
 
         CopyDirectoryWithRetries(stagingDir, DadBoardPaths.InstallDir, logger);
         CopySetupIntoInstallDir(logger);
+        CopyUpdaterIntoInstallDir(logger);
         CreateDesktopShortcut(logger);
         RestartDadBoard(logger);
 
@@ -709,6 +710,34 @@ public static class SetupOperations
         catch (Exception ex)
         {
             logger.Warn($"Failed to copy setup into install dir: {ex.Message}");
+        }
+    }
+
+    private static void CopyUpdaterIntoInstallDir(SetupLogger logger)
+    {
+        try
+        {
+            var updaterSource = Path.Combine(AppContext.BaseDirectory, "DadBoardUpdater.exe");
+            var updaterDest = DadBoardPaths.UpdaterExePath;
+            if (!File.Exists(updaterSource))
+            {
+                logger.Warn($"Updater not found at {updaterSource}");
+                return;
+            }
+
+            if (string.Equals(Path.GetFullPath(updaterSource), Path.GetFullPath(updaterDest), StringComparison.OrdinalIgnoreCase))
+            {
+                logger.Info("Updater already in install dir.");
+                return;
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(updaterDest)!);
+            File.Copy(updaterSource, updaterDest, true);
+            logger.Info($"Copied updater into install dir: {updaterDest}");
+        }
+        catch (Exception ex)
+        {
+            logger.Warn($"Failed to copy updater into install dir: {ex.Message}");
         }
     }
 

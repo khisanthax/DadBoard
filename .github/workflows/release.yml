@@ -46,6 +46,10 @@ jobs:
         run: dotnet publish -c Release -r win-x64 /p:PublishSingleFile=true /p:SelfContained=true /p:Version=$env:VERSION /p:AssemblyVersion=$env:ASSEMBLY_VERSION /p:FileVersion=$env:FILE_VERSION /p:InformationalVersion=$env:INFO_VERSION
         working-directory: modules/Spine/Setup
 
+      - name: Publish DadBoardUpdater
+        run: dotnet publish -c Release -r win-x64 /p:PublishSingleFile=true /p:SelfContained=true /p:Version=$env:VERSION /p:AssemblyVersion=$env:ASSEMBLY_VERSION /p:FileVersion=$env:FILE_VERSION /p:InformationalVersion=$env:INFO_VERSION
+        working-directory: modules/Spine/Updater
+
       - name: Validate version stamps
         shell: pwsh
         run: |
@@ -53,14 +57,19 @@ jobs:
           Write-Host "Expected version: $expected"
           $app = "modules/Spine/App/bin/Release/net8.0-windows/win-x64/publish/DadBoard.exe"
           $setup = "modules/Spine/Setup/bin/Release/net8.0-windows/win-x64/publish/DadBoardSetup.exe"
+          $updater = "modules/Spine/Updater/bin/Release/net8.0-windows/win-x64/publish/DadBoardUpdater.exe"
           $appInfo = (Get-Item $app).VersionInfo
           $setupInfo = (Get-Item $setup).VersionInfo
+          $updaterInfo = (Get-Item $updater).VersionInfo
           Write-Host "DadBoard.exe ProductVersion=$($appInfo.ProductVersion) FileVersion=$($appInfo.FileVersion)"
           Write-Host "DadBoardSetup.exe ProductVersion=$($setupInfo.ProductVersion) FileVersion=$($setupInfo.FileVersion)"
+          Write-Host "DadBoardUpdater.exe ProductVersion=$($updaterInfo.ProductVersion) FileVersion=$($updaterInfo.FileVersion)"
           if (-not $appInfo.ProductVersion.StartsWith($expected)) { throw "DadBoard.exe ProductVersion mismatch." }
           if (-not $setupInfo.ProductVersion.StartsWith($expected)) { throw "DadBoardSetup.exe ProductVersion mismatch." }
+          if (-not $updaterInfo.ProductVersion.StartsWith($expected)) { throw "DadBoardUpdater.exe ProductVersion mismatch." }
           if (-not $appInfo.FileVersion.StartsWith($env:ASSEMBLY_VERSION)) { throw "DadBoard.exe FileVersion mismatch." }
           if (-not $setupInfo.FileVersion.StartsWith($env:ASSEMBLY_VERSION)) { throw "DadBoardSetup.exe FileVersion mismatch." }
+          if (-not $updaterInfo.FileVersion.StartsWith($env:ASSEMBLY_VERSION)) { throw "DadBoardUpdater.exe FileVersion mismatch." }
 
       - name: Build release assets
         shell: pwsh
@@ -69,12 +78,15 @@ jobs:
           $baseVersion = $env:BASE_VERSION
           $publishApp = "modules/Spine/App/bin/Release/net8.0-windows/win-x64/publish"
           $publishSetup = "modules/Spine/Setup/bin/Release/net8.0-windows/win-x64/publish"
+          $publishUpdater = "modules/Spine/Updater/bin/Release/net8.0-windows/win-x64/publish"
           $payloadDir = "release_payload"
 
           New-Item -ItemType Directory -Force $payloadDir | Out-Null
           Copy-Item "$publishApp/DadBoard.exe" $payloadDir -Force
+          Copy-Item "$publishUpdater/DadBoardUpdater.exe" $payloadDir -Force
           Copy-Item "$publishApp/DadBoard.exe" "DadBoard.exe" -Force
           Copy-Item "$publishSetup/DadBoardSetup.exe" "DadBoardSetup.exe" -Force
+          Copy-Item "$publishUpdater/DadBoardUpdater.exe" "DadBoardUpdater.exe" -Force
 
           $zipName = "DadBoard-$version.zip"
           if (Test-Path $zipName) { Remove-Item $zipName -Force }
@@ -97,6 +109,7 @@ jobs:
           $zipName = "DadBoard-$version.zip"
           $required = @(
             "DadBoard.exe",
+            "DadBoardUpdater.exe",
             "DadBoardSetup.exe",
             "latest.json",
             $zipName
@@ -119,6 +132,7 @@ jobs:
           files: |
             DadBoard-*.zip
             DadBoard.exe
+            DadBoardUpdater.exe
             DadBoardSetup.exe
             latest.json
 
@@ -163,6 +177,10 @@ jobs:
         run: dotnet publish -c Release -r win-x64 /p:PublishSingleFile=true /p:SelfContained=true /p:Version=$env:VERSION /p:AssemblyVersion=$env:ASSEMBLY_VERSION /p:FileVersion=$env:FILE_VERSION /p:InformationalVersion=$env:INFO_VERSION
         working-directory: modules/Spine/Setup
 
+      - name: Publish DadBoardUpdater
+        run: dotnet publish -c Release -r win-x64 /p:PublishSingleFile=true /p:SelfContained=true /p:Version=$env:VERSION /p:AssemblyVersion=$env:ASSEMBLY_VERSION /p:FileVersion=$env:FILE_VERSION /p:InformationalVersion=$env:INFO_VERSION
+        working-directory: modules/Spine/Updater
+
       - name: Validate version stamps
         shell: pwsh
         run: |
@@ -170,14 +188,19 @@ jobs:
           Write-Host "Expected version: $expected"
           $app = "modules/Spine/App/bin/Release/net8.0-windows/win-x64/publish/DadBoard.exe"
           $setup = "modules/Spine/Setup/bin/Release/net8.0-windows/win-x64/publish/DadBoardSetup.exe"
+          $updater = "modules/Spine/Updater/bin/Release/net8.0-windows/win-x64/publish/DadBoardUpdater.exe"
           $appInfo = (Get-Item $app).VersionInfo
           $setupInfo = (Get-Item $setup).VersionInfo
+          $updaterInfo = (Get-Item $updater).VersionInfo
           Write-Host "DadBoard.exe ProductVersion=$($appInfo.ProductVersion) FileVersion=$($appInfo.FileVersion)"
           Write-Host "DadBoardSetup.exe ProductVersion=$($setupInfo.ProductVersion) FileVersion=$($setupInfo.FileVersion)"
+          Write-Host "DadBoardUpdater.exe ProductVersion=$($updaterInfo.ProductVersion) FileVersion=$($updaterInfo.FileVersion)"
           if (-not $appInfo.ProductVersion.StartsWith($expected)) { throw "DadBoard.exe ProductVersion mismatch." }
           if (-not $setupInfo.ProductVersion.StartsWith($expected)) { throw "DadBoardSetup.exe ProductVersion mismatch." }
+          if (-not $updaterInfo.ProductVersion.StartsWith($expected)) { throw "DadBoardUpdater.exe ProductVersion mismatch." }
           if (-not $appInfo.FileVersion.StartsWith($env:ASSEMBLY_VERSION)) { throw "DadBoard.exe FileVersion mismatch." }
           if (-not $setupInfo.FileVersion.StartsWith($env:ASSEMBLY_VERSION)) { throw "DadBoardSetup.exe FileVersion mismatch." }
+          if (-not $updaterInfo.FileVersion.StartsWith($env:ASSEMBLY_VERSION)) { throw "DadBoardUpdater.exe FileVersion mismatch." }
 
       - name: Build release assets
         shell: pwsh
@@ -186,12 +209,15 @@ jobs:
           $baseVersion = $env:BASE_VERSION
           $publishApp = "modules/Spine/App/bin/Release/net8.0-windows/win-x64/publish"
           $publishSetup = "modules/Spine/Setup/bin/Release/net8.0-windows/win-x64/publish"
+          $publishUpdater = "modules/Spine/Updater/bin/Release/net8.0-windows/win-x64/publish"
           $payloadDir = "release_payload"
 
           New-Item -ItemType Directory -Force $payloadDir | Out-Null
           Copy-Item "$publishApp/DadBoard.exe" $payloadDir -Force
+          Copy-Item "$publishUpdater/DadBoardUpdater.exe" $payloadDir -Force
           Copy-Item "$publishApp/DadBoard.exe" "DadBoard.exe" -Force
           Copy-Item "$publishSetup/DadBoardSetup.exe" "DadBoardSetup.exe" -Force
+          Copy-Item "$publishUpdater/DadBoardUpdater.exe" "DadBoardUpdater.exe" -Force
 
           $zipName = "DadBoard-$version.zip"
           if (Test-Path $zipName) { Remove-Item $zipName -Force }
@@ -220,5 +246,6 @@ jobs:
           files: |
             DadBoard-*.zip
             DadBoard.exe
+            DadBoardUpdater.exe
             DadBoardSetup.exe
             latest.json

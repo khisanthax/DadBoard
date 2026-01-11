@@ -2,7 +2,6 @@
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
-using System.Net.Http;
 using System.Threading;
 using System.Windows.Forms;
 using DadBoard.Agent;
@@ -32,7 +31,7 @@ sealed class TrayAppContext : ApplicationContext
     private readonly ToolStripMenuItem _openDashboardItem;
     private readonly ToolStripMenuItem _startLeaderOnLoginItem;
     private readonly ToolStripMenuItem _installItem;
-    private readonly ToolStripMenuItem _runSetupItem;
+    private readonly ToolStripMenuItem _runUpdaterItem;
     private readonly ToolStripMenuItem _resetUpdateFailuresItem;
     private readonly ToolStripMenuItem _statusItem;
     private readonly ToolStripMenuItem _diagnosticsItem;
@@ -69,7 +68,7 @@ sealed class TrayAppContext : ApplicationContext
         _startLeaderOnLoginItem.CheckedChanged += (_, _) => ToggleStartLeaderOnLogin();
 
         _installItem = new ToolStripMenuItem("Install (Admin)", null, (_, _) => Install());
-        _runSetupItem = new ToolStripMenuItem("Update / Run Setup...", null, (_, _) => _ = RunSetupAsync());
+        _runUpdaterItem = new ToolStripMenuItem("Update / Run Updater...", null, (_, _) => _ = RunUpdaterAsync());
         _resetUpdateFailuresItem = new ToolStripMenuItem("Reset Update Failures (This PC)", null, (_, _) => ResetUpdateFailuresLocal());
         _statusItem = new ToolStripMenuItem("Show Status", null, (_, _) => ShowStatus());
         _diagnosticsItem = new ToolStripMenuItem("Diagnostics", null, (_, _) => ShowDiagnostics());
@@ -83,7 +82,7 @@ sealed class TrayAppContext : ApplicationContext
             new ToolStripSeparator(),
             _startLeaderOnLoginItem,
             _installItem,
-            _runSetupItem,
+            _runUpdaterItem,
             _resetUpdateFailuresItem,
             _statusItem,
             _diagnosticsItem,
@@ -305,37 +304,46 @@ sealed class TrayAppContext : ApplicationContext
         _installItem.Text = installed ? "Repair / Reinstall (Admin)" : "Install (Admin)";
         _installItem.Enabled = true;
 
-        var setupExists = File.Exists(DadBoardPaths.SetupExePath);
-        _runSetupItem.Text = setupExists ? "Update / Run Setup..." : "Download & Run Setup...";
+        var updaterExists = File.Exists(DadBoardPaths.UpdaterExePath);
+        _runUpdaterItem.Text = updaterExists ? "Update / Run Updater..." : "Updater missing (Run Repair)...";
     }
 
-    private async System.Threading.Tasks.Task RunSetupAsync()
+    private System.Threading.Tasks.Task RunUpdaterAsync()
     {
-        var setupPath = DadBoardPaths.SetupExePath;
         var installDir = DadBoardPaths.InstallDir;
+        var updaterPath = DadBoardPaths.UpdaterExePath;
         try
         {
             Directory.CreateDirectory(installDir);
-            if (!File.Exists(setupPath))
+            if (!File.Exists(updaterPath))
             {
                 var result = MessageBox.Show(
-                    $"DadBoardSetup.exe not found at:{Environment.NewLine}{setupPath}{Environment.NewLine}{Environment.NewLine}Download updater now?",
+                    $"DadBoardUpdater.exe not found at:{Environment.NewLine}{updaterPath}{Environment.NewLine}{Environment.NewLine}Run repair to restore updater?",
                     "DadBoard",
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Question);
                 if (result != DialogResult.Yes)
                 {
-                    return;
+                    return System.Threading.Tasks.Task.CompletedTask;
                 }
 
-                var ok = await DownloadSetupAsync(setupPath).ConfigureAwait(true);
-                if (!ok)
+                if (File.Exists(DadBoardPaths.SetupExePath))
                 {
-                    return;
+                    if (!TryLaunchExecutable("setup", DadBoardPaths.SetupExePath, installDir, out var setupError))
+                    {
+                        MessageBox.Show(
+                            $"Failed to launch setup: {setupError}",
+                            "DadBoard",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Error);
+                    }
+                    return System.Threading.Tasks.Task.CompletedTask;
                 }
+
+                return System.Threading.Tasks.Task.CompletedTask;
             }
 
-            if (!TryLaunchSetup(setupPath, installDir, out var error))
+            if (!TryLaunchExecutable("updater", updaterPath, installDir, out var error))
             {
                 MessageBox.Show(
                     $"Failed to launch updater: {error}",
@@ -346,23 +354,25 @@ sealed class TrayAppContext : ApplicationContext
         }
         catch (Exception ex)
         {
-            _updateLogger.Error($"RunSetup failed: {ex}");
+            _updateLogger.Error($"RunUpdater failed: {ex}");
             MessageBox.Show(
                 $"Failed to run updater: {ex.Message}",
                 "DadBoard",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
         }
+
+        return System.Threading.Tasks.Task.CompletedTask;
     }
 
-    private bool TryLaunchSetup(string setupPath, string installDir, out string error)
+    private bool TryLaunchExecutable(string label, string exePath, string installDir, out string error)
     {
         error = "";
         try
         {
             var startInfo = new ProcessStartInfo
             {
-                FileName = setupPath,
+                FileName = exePath,
                 WorkingDirectory = installDir,
                 UseShellExecute = true
             };
@@ -371,132 +381,19 @@ sealed class TrayAppContext : ApplicationContext
             if (process == null)
             {
                 error = "Process failed to start.";
-                _updateLogger.Warn($"Setup start returned null for {setupPath}");
+                _updateLogger.Warn($"{label} start returned null for {exePath}");
                 return false;
             }
 
-            _updateLogger.Info($"Launched setup: {setupPath}");
+            _updateLogger.Info($"Launched {label}: {exePath}");
             return true;
         }
         catch (Exception ex)
         {
             error = ex.Message;
-            _updateLogger.Error($"Setup start failed: {ex}");
+            _updateLogger.Error($"{label} start failed: {ex}");
             return false;
         }
-    }
-
-    private async System.Threading.Tasks.Task<bool> DownloadSetupAsync(string setupPath)
-    {
-        var (primaryUrl, fallbackUrl, localPath) = ResolveSetupDownloadSources();
-        if (!string.IsNullOrWhiteSpace(localPath) && File.Exists(localPath))
-        {
-            try
-            {
-                File.Copy(localPath, setupPath, true);
-                _updateLogger.Info($"Copied setup from {localPath}");
-                return true;
-            }
-            catch (Exception ex)
-            {
-                _updateLogger.Warn($"Setup copy failed: {ex.Message}");
-            }
-        }
-
-        using var client = new HttpClient
-        {
-            Timeout = TimeSpan.FromSeconds(15)
-        };
-
-        string? lastError = null;
-        foreach (var url in new[] { primaryUrl, fallbackUrl })
-        {
-            if (string.IsNullOrWhiteSpace(url))
-            {
-                continue;
-            }
-
-            try
-            {
-                _updateLogger.Info($"Downloading setup: {url}");
-                var bytes = await client.GetByteArrayAsync(url).ConfigureAwait(true);
-                await File.WriteAllBytesAsync(setupPath, bytes).ConfigureAwait(true);
-                _updateLogger.Info($"Setup downloaded to {setupPath}");
-                return true;
-            }
-            catch (Exception ex)
-            {
-                lastError = ex.Message;
-                _updateLogger.Warn($"Setup download failed from {url}: {ex.Message}");
-            }
-        }
-
-        MessageBox.Show(
-            $"Failed to download DadBoardSetup.exe.{Environment.NewLine}{lastError ?? "No update source configured."}",
-            "DadBoard",
-            MessageBoxButtons.OK,
-            MessageBoxIcon.Error);
-        return false;
-    }
-
-    private (string PrimaryUrl, string FallbackUrl, string LocalPath) ResolveSetupDownloadSources()
-    {
-        var manifestUrl = "";
-        if (_leader != null)
-        {
-            var snapshot = _leader.GetUpdateMirrorSnapshot();
-            manifestUrl = snapshot.LocalHostUrl;
-        }
-
-        var config = UpdateConfigStore.Load();
-        var fallbackManifest = UpdateConfigStore.ResolveManifestUrl(config);
-
-        var primaryUrl = BuildSetupUrlFromManifest(manifestUrl);
-        var fallbackUrl = BuildSetupUrlFromManifest(fallbackManifest);
-
-        var localPath = "";
-        var manifestPath = ResolveLocalManifestPath(manifestUrl);
-        if (!string.IsNullOrWhiteSpace(manifestPath))
-        {
-            localPath = Path.Combine(Path.GetDirectoryName(manifestPath) ?? "", "DadBoardSetup.exe");
-        }
-
-        return (primaryUrl, fallbackUrl, localPath);
-    }
-
-    private static string BuildSetupUrlFromManifest(string manifestUrl)
-    {
-        if (string.IsNullOrWhiteSpace(manifestUrl))
-        {
-            return "";
-        }
-
-        if (manifestUrl.EndsWith("latest.json", StringComparison.OrdinalIgnoreCase))
-        {
-            return manifestUrl.Substring(0, manifestUrl.Length - "latest.json".Length) + "DadBoardSetup.exe";
-        }
-
-        return "";
-    }
-
-    private static string ResolveLocalManifestPath(string manifestUrl)
-    {
-        if (string.IsNullOrWhiteSpace(manifestUrl))
-        {
-            return "";
-        }
-
-        if (File.Exists(manifestUrl))
-        {
-            return manifestUrl;
-        }
-
-        if (Uri.TryCreate(manifestUrl, UriKind.Absolute, out var uri) && uri.IsFile)
-        {
-            return uri.LocalPath;
-        }
-
-        return "";
     }
 
     private void Exit()
