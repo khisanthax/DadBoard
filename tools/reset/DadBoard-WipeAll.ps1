@@ -74,8 +74,8 @@ foreach ($path in $pathsToRemove) {
 }
 
 $shortcuts = @(
-    Join-Path $env:USERPROFILE "Desktop\DadBoard.lnk",
-    "C:\Users\Public\Desktop\DadBoard.lnk"
+    (Join-Path -Path $env:USERPROFILE -ChildPath "Desktop\DadBoard.lnk"),
+    (Join-Path -Path $env:PUBLIC -ChildPath "Desktop\DadBoard.lnk")
 )
 
 foreach ($shortcut in $shortcuts) {
@@ -94,8 +94,8 @@ foreach ($shortcut in $shortcuts) {
 }
 
 $startMenuDirs = @(
-    Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\DadBoard",
-    "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\DadBoard"
+    (Join-Path -Path $env:APPDATA -ChildPath "Microsoft\Windows\Start Menu\Programs\DadBoard"),
+    (Join-Path -Path $env:ProgramData -ChildPath "Microsoft\Windows\Start Menu\Programs\DadBoard")
 )
 
 foreach ($dir in $startMenuDirs) {
@@ -119,9 +119,10 @@ try {
     foreach ($task in $tasks) {
         if ($PSCmdlet.ShouldProcess($task.TaskName, "Unregister-ScheduledTask")) {
             try {
-                Unregister-ScheduledTask -TaskName $task.TaskName -Confirm:$false -ErrorAction Continue
+                Unregister-ScheduledTask -TaskName $task.TaskName -Confirm:$false -ErrorAction Stop
                 Write-Log "Removed scheduled task $($task.TaskName)"
-            } catch {
+            }
+            catch {
                 Write-Log "Failed to remove scheduled task $($task.TaskName): $($_.Exception.Message)" "WARN"
             }
         }
