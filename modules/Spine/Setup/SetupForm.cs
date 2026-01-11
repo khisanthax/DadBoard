@@ -273,12 +273,57 @@ public sealed class SetupForm : Form
             return;
         }
 
-        Process.Start(new ProcessStartInfo(DadBoardPaths.InstalledExePath) { UseShellExecute = true });
+        if (IsDadBoardRunning())
+        {
+            MessageBox.Show("DadBoard is already running.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var startInfo = new ProcessStartInfo(
+            DadBoardPaths.InstalledExePath,
+            "--mode agent --minimized --no-first-run")
+        {
+            UseShellExecute = true,
+            WorkingDirectory = Path.GetDirectoryName(DadBoardPaths.InstalledExePath)
+        };
+
+        Process.Start(startInfo);
     }
 
     private void AppendLog(string message)
     {
         _logBox.AppendText($"{DateTime.Now:HH:mm:ss} {message}{Environment.NewLine}");
+    }
+
+    private bool IsDadBoardRunning()
+    {
+        try
+        {
+            var expected = Path.GetFullPath(DadBoardPaths.InstalledExePath);
+            foreach (var process in Process.GetProcessesByName("DadBoard"))
+            {
+                try
+                {
+                    var path = process.MainModule?.FileName;
+                    if (!string.IsNullOrWhiteSpace(path) &&
+                        string.Equals(Path.GetFullPath(path), expected, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _logger?.Info("Start requested but DadBoard is already running.");
+                        return true;
+                    }
+                }
+                catch
+                {
+                    // ignore access issues for other processes
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.Warn($"Failed to detect running DadBoard: {ex.Message}");
+        }
+
+        return false;
     }
 
     private Control BuildUpdateConfigPanel()
