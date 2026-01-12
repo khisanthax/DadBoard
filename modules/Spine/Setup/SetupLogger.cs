@@ -34,13 +34,13 @@ public sealed class SetupLogger : IDisposable
         {
             var dir = Path.GetDirectoryName(_logPath) ?? DadBoardPaths.SetupLogDir;
             Directory.CreateDirectory(dir);
-            var fallback = Path.Combine(dir, $"setup_{DateTime.UtcNow:yyyyMMdd_HHmmss}.log");
+            var fallback = Path.Combine(dir, $"setup_{DateTimeOffset.Now:yyyyMMdd_HHmmss}.log");
             _logPath = fallback;
             var stream = new FileStream(_logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
             _writer = new StreamWriter(stream) { AutoFlush = true };
         }
 
-        _writer.WriteLine($"{DateTime.UtcNow:O} [INFO] Setup started.");
+        _writer.WriteLine($"{DateTimeOffset.Now:O} [INFO] Setup started.");
     }
 
     public string LogPath => _logPath;
@@ -51,7 +51,7 @@ public sealed class SetupLogger : IDisposable
 
     private void Write(string level, string message)
     {
-        var line = $"{DateTime.UtcNow:O} [{level}] {message}";
+        var line = $"{DateTimeOffset.Now:O} [{level}] {message}";
         lock (_lock)
         {
             if (_disposed)

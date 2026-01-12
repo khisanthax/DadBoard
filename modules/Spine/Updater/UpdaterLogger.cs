@@ -34,7 +34,7 @@ sealed class UpdaterLogger : IDisposable
     {
         lock (_lock)
         {
-            _writer?.WriteLine($"{DateTime.UtcNow:O} [{level}] {message}");
+            _writer?.WriteLine($"{DateTimeOffset.Now:O} [{level}] {message}");
         }
     }
 

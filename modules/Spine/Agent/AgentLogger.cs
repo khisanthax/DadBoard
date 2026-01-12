@@ -21,7 +21,7 @@ public sealed class AgentLogger
     {
         try
         {
-            var line = $"{DateTime.UtcNow:O} [{level}] {message}";
+            var line = $"{DateTimeOffset.Now:O} [{level}] {message}";
             lock (_lock)
             {
                 File.AppendAllText(_path, line + Environment.NewLine);

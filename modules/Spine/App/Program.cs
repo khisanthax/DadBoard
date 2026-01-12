@@ -91,7 +91,7 @@ static class Program
             var fallbackDir = Path.Combine(Path.GetTempPath(), "DadBoard");
             Directory.CreateDirectory(fallbackDir);
             var logPath = Path.Combine(fallbackDir, "dadboard_boot.log");
-            File.AppendAllText(logPath, $"{DateTime.UtcNow:O} {ex}{Environment.NewLine}");
+            File.AppendAllText(logPath, $"{DateTimeOffset.Now:O} {ex}{Environment.NewLine}");
             MessageBox.Show(
                 $"DadBoard failed to start. Details written to:{Environment.NewLine}{logPath}",
                 "DadBoard",
