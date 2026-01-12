@@ -289,6 +289,8 @@ Delivered:
 - Tray delegates updates to `DadBoardUpdater.exe` (check/repair)
 - Updater writes a status file (`%LOCALAPPDATA%\\DadBoard\\Updater\\last_result.json`)
 - Diagnostics reads updater status instead of performing update decisions
+- Updater UI only auto-runs when launched with `--auto`; manual open stays idle
+- Update status dialog is copyable (text box + Copy button)
 
 ## PHASE 7 - POLISH AND QUALITY OF LIFE
 
