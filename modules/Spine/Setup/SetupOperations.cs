@@ -274,6 +274,12 @@ public static class SetupOperations
         }
 
         logger.Info("File lock released.");
+
+        if (!StopUpdaterProcesses(logger, timeout))
+        {
+            return false;
+        }
+
         return true;
     }
 
@@ -284,7 +290,8 @@ public static class SetupOperations
             return true;
         }
 
-        logger.Info("Waiting for DadBoard.exe to exit...");
+        var fileName = Path.GetFileName(path);
+        logger.Info($"Waiting for {fileName} to exit...");
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
         {
@@ -302,6 +309,71 @@ public static class SetupOperations
         return false;
     }
 
+    private static bool StopUpdaterProcesses(SetupLogger logger, TimeSpan timeout)
+    {
+        var processes = GetUpdaterProcesses();
+        if (processes.Count == 0)
+        {
+            logger.Info("No running DadBoardUpdater processes found.");
+            return true;
+        }
+
+        var pids = string.Join(",", processes.Select(p => p.Id));
+        logger.Info($"Stopping DadBoardUpdater (PIDs: {pids})");
+
+        foreach (var process in processes)
+        {
+            try
+            {
+                if (process.MainWindowHandle != IntPtr.Zero)
+                {
+                    process.CloseMainWindow();
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (GetUpdaterProcesses().Count == 0)
+            {
+                logger.Info("DadBoardUpdater stopped.");
+                break;
+            }
+
+            Thread.Sleep(500);
+        }
+
+        if (GetUpdaterProcesses().Count > 0)
+        {
+            logger.Warn("DadBoardUpdater did not exit; forcing termination.");
+            foreach (var process in GetUpdaterProcesses())
+            {
+                try
+                {
+                    process.Kill(true);
+                    logger.Warn($"Force kill applied pid={process.Id}");
+                }
+                catch (Exception ex)
+                {
+                    logger.Warn($"Force kill failed pid={process.Id}: {ex.Message}");
+                }
+            }
+        }
+
+        if (!WaitForFileUnlock(DadBoardPaths.UpdaterExePath, TimeSpan.FromSeconds(5), logger))
+        {
+            logger.Warn("DadBoardUpdater.exe did not release file lock after shutdown/kill.");
+            return false;
+        }
+
+        logger.Info("Updater file lock released.");
+        return true;
+    }
+
     private static List<Process> GetDadBoardProcesses()
     {
         var list = new List<Process>();
@@ -312,6 +384,35 @@ public static class SetupOperations
                 var path = process.MainModule?.FileName ?? "";
                 if (string.IsNullOrWhiteSpace(path) ||
                     string.Equals(Path.GetFullPath(path), Path.GetFullPath(DadBoardPaths.InstalledExePath), StringComparison.OrdinalIgnoreCase))
+                {
+                    list.Add(process);
+                }
+            }
+            catch
+            {
+                list.Add(process);
+            }
+        }
+
+        return list;
+    }
+
+    private static List<Process> GetUpdaterProcesses()
+    {
+        var list = new List<Process>();
+        var currentPid = Process.GetCurrentProcess().Id;
+        foreach (var process in Process.GetProcessesByName("DadBoardUpdater"))
+        {
+            try
+            {
+                if (process.Id == currentPid)
+                {
+                    continue;
+                }
+
+                var path = process.MainModule?.FileName ?? "";
+                if (string.IsNullOrWhiteSpace(path) ||
+                    string.Equals(Path.GetFullPath(path), Path.GetFullPath(DadBoardPaths.UpdaterExePath), StringComparison.OrdinalIgnoreCase))
                 {
                     list.Add(process);
                 }
