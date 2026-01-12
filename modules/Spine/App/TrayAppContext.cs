@@ -474,6 +474,7 @@ sealed class TrayAppContext : ApplicationContext
         _tray.Visible = false;
         _leaderForm?.AllowClose();
         _leaderForm?.Close();
+        _statusForm?.AllowClose();
         _statusForm?.Close();
         _diagnosticsForm?.Close();
         _leader?.Dispose();
