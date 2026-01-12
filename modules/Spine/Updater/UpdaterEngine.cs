@@ -104,18 +104,20 @@ sealed class UpdaterEngine
                 }
             }
 
-            var setupExe = DadBoardPaths.SetupExePath;
+            var stagedSetup = Path.Combine(DadBoardPaths.UpdateSourceDir, "DadBoardSetup.exe");
+            log("Ensuring latest DadBoardSetup.exe is available...");
+            var ok = await EnsureSetupPresentAsync(manifestUrl, manifest.PackageUrl, stagedSetup, ct, log).ConfigureAwait(false);
+            var setupExe = ok && File.Exists(stagedSetup) ? stagedSetup : DadBoardPaths.SetupExePath;
             if (!File.Exists(setupExe))
             {
-                log("DadBoardSetup.exe missing; downloading setup.");
-                var ok = await EnsureSetupPresentAsync(manifestUrl, manifest.PackageUrl, setupExe, ct, log).ConfigureAwait(false);
-                if (!ok || !File.Exists(setupExe))
-                {
-                    status.Result = "failed";
-                    status.Message = "DadBoardSetup.exe not found.";
-                    UpdaterStatusStore.Save(status);
-                    return UpdaterResult.Failed(status.Message);
-                }
+                status.Result = "failed";
+                status.Message = "DadBoardSetup.exe not found.";
+                UpdaterStatusStore.Save(status);
+                return UpdaterResult.Failed(status.Message);
+            }
+            if (!string.Equals(setupExe, DadBoardPaths.SetupExePath, StringComparison.OrdinalIgnoreCase))
+            {
+                log($"Using staged setup: {setupExe}");
             }
 
             var exitCode = await LaunchSetupAsync(setupExe, packageFile, ct, log).ConfigureAwait(false);
