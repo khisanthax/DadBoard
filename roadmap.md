@@ -72,14 +72,13 @@ At the end of every completed task:
 - Orchestrates commands and readiness
 - Can run headless (tray) or with dashboard UI
 
-### 1.3 Installation Model
-- ONE executable (`DadBoard.exe`)
-- User runs EXE -> chooses Install
-- Installer:
-  - Elevates once
-  - Installs to Program Files
-  - Sets up agent auto-start
-  - Shows progress and success confirmation
+### 1.3 Installation and Update Model
+- Three executables with clean boundaries:
+  - `DadBoard.exe` (app runtime + tray/dashboard/leader/agent; no update logic)
+  - `DadBoardUpdater.exe` (decides updates, downloads payloads, launches Setup)
+  - `DadBoardSetup.exe` (installer/executor; stop/wait/unlock/replace/restart)
+- Canonical install path:
+  - `%LOCALAPPDATA%\\Programs\\DadBoard`
 - No PS1 required for normal use
 
 ---
@@ -112,7 +111,7 @@ Prove the orchestration spine works end-to-end.
 
 ---
 
-## PHASE 2 - UX + RELIABILITY HARDENING (CURRENT)
+## PHASE 2 - UX + RELIABILITY HARDENING (DONE)
 
 ### Phase 2.0 - Operator Control
 **Goal:** Recover gracefully from hiccups.
@@ -166,7 +165,7 @@ Exit:
 
 ---
 
-## PHASE 3 - GAME LAUNCH MVP
+## PHASE 3 - GAME LAUNCH MVP (PAUSED)
 
 ### Goal
 Replace "Notepad" with real games.
@@ -239,6 +238,49 @@ Exit:
 - One app orchestrates launch + voice + mic control
 
 ---
+
+## PHASE 3.5 - SELF-UPDATE SYSTEM (OPTION B1) (DONE)
+
+Delivered:
+- GitHub Actions builds release assets:
+  - `DadBoard.exe`
+  - `DadBoardSetup.exe`
+  - `DadBoardUpdater.exe`
+  - `DadBoard-<version>.zip`
+  - `latest.json`
+- Nightly + Stable channels (default: Nightly)
+- Leader mirrors GitHub releases over LAN and serves updates locally
+- Agents pull from Leader with GitHub fallback
+- Update lifecycle reporting survives restarts (requested → updating → restarting → updated/failed)
+- Diagnostics shows:
+  - Channel
+  - Resolved manifest URL
+  - Installed vs available versions
+  - Update decision
+- Reset Update Failures UX + backend
+
+## PHASE 3.6 - VERSIONING CORRECTNESS (DONE)
+
+Delivered:
+- Git tag is single source of truth
+- Version stamping aligned across:
+  - ProductVersion
+  - FileVersion
+  - InformationalVersion
+  - `latest.json.latest_version`
+- SemVer comparison uses numeric ordering and ignores build metadata
+- Nightly prerelease SemVer uses `x.y.z-nightly.N`
+- Baseline correction: `v0.1.0.1` as first correct-by-default baseline
+
+## PHASE 3.7 - INSTALLER AND UPDATE HARDENING (DONE)
+
+Delivered:
+- Setup is executor-only (payload path required; no network/manifest logic)
+- Updater downloads payload and invokes Setup with `repair --payload <zip>`
+- Auto-unblock downloaded updater/setup binaries (removes Mark of the Web)
+- Tray update path runs Updater
+- Desktop shortcut enforced on install/repair
+- Setup CLI contract documented (`docs/setup-cli.md`)
 
 ## PHASE 7 - POLISH AND QUALITY OF LIFE
 
