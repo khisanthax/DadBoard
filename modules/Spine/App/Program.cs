@@ -12,38 +12,9 @@ static class Program
     {
         try
         {
-            var updateLogger = new UpdateLogger();
-            var updatePayload = GetArgValue(args, "--apply-update");
-            if (!string.IsNullOrWhiteSpace(updatePayload))
-            {
-                var waitPid = GetArgValue(args, "--wait-pid");
-                if (!RuntimeBootstrapper.ApplyUpdate(updatePayload, waitPid, args, updateLogger, out var error))
-                {
-                    MessageBox.Show(
-                        error ?? "Update failed.",
-                        "DadBoard",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Error);
-                }
-                return;
-            }
-
             var isInstallFlow = args.Any(arg =>
                 string.Equals(arg, "--install-elevated", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(arg, "--install", StringComparison.OrdinalIgnoreCase));
-
-            if (!isInstallFlow && RuntimeBootstrapper.IsLegacyBootstrapperPath())
-            {
-                if (!RuntimeBootstrapper.TryLaunchRuntime(args, updateLogger, out var error))
-                {
-                    MessageBox.Show(
-                        error ?? "Failed to launch runtime.",
-                        "DadBoard",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Error);
-                }
-                return;
-            }
 
             if (args.Any(arg => string.Equals(arg, "--install-elevated", StringComparison.OrdinalIgnoreCase)))
             {

@@ -20,69 +20,126 @@ sealed class UpdaterEngine
         };
     }
 
-    public async Task<UpdaterResult> RunAsync(UpdateConfig config, CancellationToken ct, Action<string> log)
+    public async Task<UpdaterResult> RunAsync(
+        UpdateConfig config,
+        bool forceRepair,
+        string action,
+        string logPath,
+        CancellationToken ct,
+        Action<string> log)
     {
-        var manifestUrl = UpdateConfigStore.ResolveManifestUrl(config);
-        if (string.IsNullOrWhiteSpace(manifestUrl))
+        var status = new UpdaterStatus
         {
-            return UpdaterResult.Failed("Update source not configured.");
-        }
+            TimestampUtc = DateTime.UtcNow.ToString("O"),
+            Action = action,
+            LogPath = logPath ?? ""
+        };
 
-        log($"Channel={config.UpdateChannel} manifest={manifestUrl}");
-        var installedVersion = VersionUtil.GetVersionFromFile(DadBoardPaths.InstalledExePath);
-        log($"Installed version={installedVersion}");
-
-        var manifest = await TryLoadManifestAsync(manifestUrl, ct, log).ConfigureAwait(false);
-        if (manifest == null)
+        try
         {
-            return UpdaterResult.Failed("Failed to load update manifest.");
-        }
-
-        var latest = VersionUtil.Normalize(manifest.LatestVersion);
-        log($"Available version={latest}");
-
-        if (VersionUtil.Compare(latest, installedVersion) <= 0)
-        {
-            return UpdaterResult.UpToDate(latest);
-        }
-
-        if (string.IsNullOrWhiteSpace(manifest.PackageUrl))
-        {
-            return UpdaterResult.Failed("Update manifest is missing package_url.");
-        }
-
-        var packageFile = GetPackagePath(manifest.PackageUrl, latest);
-        log($"Downloading package to {packageFile}");
-        await DownloadPackageAsync(manifest.PackageUrl, packageFile, ct, log).ConfigureAwait(false);
-
-        if (!string.IsNullOrWhiteSpace(manifest.Sha256))
-        {
-            var expected = manifest.Sha256.Trim();
-            var actual = HashUtil.ComputeSha256(packageFile);
-            if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+            var manifestUrl = UpdateConfigStore.ResolveManifestUrl(config);
+            status.ManifestUrl = manifestUrl ?? "";
+            if (string.IsNullOrWhiteSpace(manifestUrl))
             {
-                return UpdaterResult.Failed("SHA256 mismatch for update package.");
+                status.Result = "failed";
+                status.Message = "Update source not configured.";
+                UpdaterStatusStore.Save(status);
+                return UpdaterResult.Failed(status.Message);
             }
-        }
 
-        var setupExe = DadBoardPaths.SetupExePath;
-        if (!File.Exists(setupExe))
-        {
-            log("DadBoardSetup.exe missing; downloading setup.");
-            var ok = await EnsureSetupPresentAsync(manifestUrl, manifest.PackageUrl, setupExe, ct, log).ConfigureAwait(false);
-            if (!ok || !File.Exists(setupExe))
+            log($"Channel={config.UpdateChannel} manifest={manifestUrl}");
+            var installedVersion = VersionUtil.GetVersionFromFile(DadBoardPaths.InstalledExePath);
+            installedVersion = VersionUtil.Normalize(installedVersion);
+            status.InstalledVersion = installedVersion;
+            log($"Installed version={installedVersion}");
+
+            var manifest = await TryLoadManifestAsync(manifestUrl, ct, log).ConfigureAwait(false);
+            if (manifest == null)
             {
-                return UpdaterResult.Failed("DadBoardSetup.exe not found.");
+                status.Result = "failed";
+                status.Message = "Failed to load update manifest.";
+                UpdaterStatusStore.Save(status);
+                return UpdaterResult.Failed(status.Message);
             }
-        }
 
-        var exitCode = await LaunchSetupAsync(setupExe, packageFile, ct, log).ConfigureAwait(false);
-        if (exitCode != 0)
+            var latest = VersionUtil.Normalize(manifest.LatestVersion);
+            status.AvailableVersion = latest;
+            log($"Available version={latest}");
+
+            if (!forceRepair && VersionUtil.Compare(latest, installedVersion) <= 0)
+            {
+                status.Result = "up-to-date";
+                status.Message = "Already up to date.";
+                UpdaterStatusStore.Save(status);
+                return UpdaterResult.UpToDate(latest);
+            }
+
+            if (string.IsNullOrWhiteSpace(manifest.PackageUrl))
+            {
+                status.Result = "failed";
+                status.Message = "Update manifest is missing package_url.";
+                UpdaterStatusStore.Save(status);
+                return UpdaterResult.Failed(status.Message);
+            }
+
+            if (forceRepair)
+            {
+                log("Force repair enabled: applying latest package.");
+            }
+
+            var packageFile = GetPackagePath(manifest.PackageUrl, latest);
+            log($"Downloading package to {packageFile}");
+            await DownloadPackageAsync(manifest.PackageUrl, packageFile, ct, log).ConfigureAwait(false);
+
+            if (!string.IsNullOrWhiteSpace(manifest.Sha256))
+            {
+                var expected = manifest.Sha256.Trim();
+                var actual = HashUtil.ComputeSha256(packageFile);
+                if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+                {
+                    status.Result = "failed";
+                    status.Message = "SHA256 mismatch for update package.";
+                    UpdaterStatusStore.Save(status);
+                    return UpdaterResult.Failed(status.Message);
+                }
+            }
+
+            var setupExe = DadBoardPaths.SetupExePath;
+            if (!File.Exists(setupExe))
+            {
+                log("DadBoardSetup.exe missing; downloading setup.");
+                var ok = await EnsureSetupPresentAsync(manifestUrl, manifest.PackageUrl, setupExe, ct, log).ConfigureAwait(false);
+                if (!ok || !File.Exists(setupExe))
+                {
+                    status.Result = "failed";
+                    status.Message = "DadBoardSetup.exe not found.";
+                    UpdaterStatusStore.Save(status);
+                    return UpdaterResult.Failed(status.Message);
+                }
+            }
+
+            var exitCode = await LaunchSetupAsync(setupExe, packageFile, ct, log).ConfigureAwait(false);
+            if (exitCode != 0)
+            {
+                status.Result = "failed";
+                status.Message = $"DadBoardSetup.exe exited with code {exitCode}.";
+                UpdaterStatusStore.Save(status);
+                return UpdaterResult.Failed(status.Message);
+            }
+
+            status.Result = "updated";
+            status.Message = "Update applied.";
+            UpdaterStatusStore.Save(status);
+            return UpdaterResult.Updated(latest);
+        }
+        catch (Exception ex)
         {
-            return UpdaterResult.Failed($"DadBoardSetup.exe exited with code {exitCode}.");
+            status.Result = "failed";
+            status.Message = ex.Message;
+            UpdaterStatusStore.Save(status);
+            log($"Updater failed: {ex}");
+            return UpdaterResult.Failed(ex.Message);
         }
-
-        return UpdaterResult.Updated(latest);
     }
 
     private static string GetPackagePath(string packageUrl, string version)

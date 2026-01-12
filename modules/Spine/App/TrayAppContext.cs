@@ -31,7 +31,9 @@ sealed class TrayAppContext : ApplicationContext
     private readonly ToolStripMenuItem _openDashboardItem;
     private readonly ToolStripMenuItem _startLeaderOnLoginItem;
     private readonly ToolStripMenuItem _installItem;
-    private readonly ToolStripMenuItem _runUpdaterItem;
+    private readonly ToolStripMenuItem _checkUpdatesItem;
+    private readonly ToolStripMenuItem _viewUpdateStatusItem;
+    private readonly ToolStripMenuItem _repairItem;
     private readonly ToolStripMenuItem _resetUpdateFailuresItem;
     private readonly ToolStripMenuItem _statusItem;
     private readonly ToolStripMenuItem _diagnosticsItem;
@@ -68,7 +70,9 @@ sealed class TrayAppContext : ApplicationContext
         _startLeaderOnLoginItem.CheckedChanged += (_, _) => ToggleStartLeaderOnLogin();
 
         _installItem = new ToolStripMenuItem("Install (Admin)", null, (_, _) => Install());
-        _runUpdaterItem = new ToolStripMenuItem("Update / Run Updater...", null, (_, _) => _ = RunUpdaterAsync());
+        _checkUpdatesItem = new ToolStripMenuItem("Check for updates now", null, (_, _) => _ = RunUpdaterAsync("check --interactive"));
+        _viewUpdateStatusItem = new ToolStripMenuItem("View update status/log", null, (_, _) => ShowUpdateStatus());
+        _repairItem = new ToolStripMenuItem("Repair / Reinstall", null, (_, _) => _ = RunUpdaterAsync("repair --interactive"));
         _resetUpdateFailuresItem = new ToolStripMenuItem("Reset Update Failures (This PC)", null, (_, _) => ResetUpdateFailuresLocal());
         _statusItem = new ToolStripMenuItem("Show Status", null, (_, _) => ShowStatus());
         _diagnosticsItem = new ToolStripMenuItem("Diagnostics", null, (_, _) => ShowDiagnostics());
@@ -82,7 +86,9 @@ sealed class TrayAppContext : ApplicationContext
             new ToolStripSeparator(),
             _startLeaderOnLoginItem,
             _installItem,
-            _runUpdaterItem,
+            _checkUpdatesItem,
+            _viewUpdateStatusItem,
+            _repairItem,
             _resetUpdateFailuresItem,
             _statusItem,
             _diagnosticsItem,
@@ -301,14 +307,16 @@ sealed class TrayAppContext : ApplicationContext
         _disableLeaderItem.Enabled = leaderEnabled;
         _openDashboardItem.Enabled = leaderEnabled;
         var installed = Installer.IsInstalled();
-        _installItem.Text = installed ? "Repair / Reinstall (Admin)" : "Install (Admin)";
-        _installItem.Enabled = true;
+        _installItem.Text = installed ? "Install (Admin)" : "Install (Admin)";
+        _installItem.Enabled = !installed;
 
         var updaterExists = File.Exists(DadBoardPaths.UpdaterExePath);
-        _runUpdaterItem.Text = updaterExists ? "Update / Run Updater..." : "Updater missing (Run Repair)...";
+        _checkUpdatesItem.Enabled = updaterExists;
+        _repairItem.Enabled = updaterExists;
+        _viewUpdateStatusItem.Enabled = true;
     }
 
-    private System.Threading.Tasks.Task RunUpdaterAsync()
+    private System.Threading.Tasks.Task RunUpdaterAsync(string args)
     {
         var installDir = DadBoardPaths.InstallDir;
         var updaterPath = DadBoardPaths.UpdaterExePath;
@@ -329,7 +337,7 @@ sealed class TrayAppContext : ApplicationContext
 
                 if (File.Exists(DadBoardPaths.SetupExePath))
                 {
-                    if (!TryLaunchExecutable("setup", DadBoardPaths.SetupExePath, installDir, out var setupError))
+                    if (!TryLaunchExecutable("setup", DadBoardPaths.SetupExePath, "", installDir, out var setupError))
                     {
                         MessageBox.Show(
                             $"Failed to launch setup: {setupError}",
@@ -343,7 +351,8 @@ sealed class TrayAppContext : ApplicationContext
                 return System.Threading.Tasks.Task.CompletedTask;
             }
 
-            if (!TryLaunchExecutable("updater", updaterPath, installDir, out var error))
+            _updateLogger.Info($"Launching updater with args: {args}");
+            if (!TryLaunchExecutable("updater", updaterPath, args, installDir, out var error))
             {
                 MessageBox.Show(
                     $"Failed to launch updater: {error}",
@@ -365,7 +374,29 @@ sealed class TrayAppContext : ApplicationContext
         return System.Threading.Tasks.Task.CompletedTask;
     }
 
-    private bool TryLaunchExecutable(string label, string exePath, string installDir, out string error)
+    private void ShowUpdateStatus()
+    {
+        var status = UpdaterStatusStore.Load();
+        if (status == null)
+        {
+            MessageBox.Show("No updater status found yet.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var message =
+            $"Action: {status.Action}{Environment.NewLine}" +
+            $"Installed: {status.InstalledVersion}{Environment.NewLine}" +
+            $"Available: {status.AvailableVersion}{Environment.NewLine}" +
+            $"Result: {status.Result}{Environment.NewLine}" +
+            $"Message: {status.Message}{Environment.NewLine}" +
+            $"Manifest: {status.ManifestUrl}{Environment.NewLine}" +
+            $"Last run: {status.TimestampUtc}{Environment.NewLine}" +
+            $"Log: {status.LogPath}";
+
+        MessageBox.Show(message, "DadBoard Update Status", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    private bool TryLaunchExecutable(string label, string exePath, string args, string installDir, out string error)
     {
         error = "";
         try
@@ -373,6 +404,7 @@ sealed class TrayAppContext : ApplicationContext
             var startInfo = new ProcessStartInfo
             {
                 FileName = exePath,
+                Arguments = args,
                 WorkingDirectory = installDir,
                 UseShellExecute = true
             };

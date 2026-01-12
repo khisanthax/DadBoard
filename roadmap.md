@@ -282,6 +282,14 @@ Delivered:
 - Desktop shortcut enforced on install/repair
 - Setup CLI contract documented (`docs/setup-cli.md`)
 
+## PHASE 3.8 - APP UPDATE DELEGATION (DONE)
+
+Delivered:
+- `DadBoard.exe` no longer performs update checks or downloads
+- Tray delegates updates to `DadBoardUpdater.exe` (check/repair)
+- Updater writes a status file (`%LOCALAPPDATA%\\DadBoard\\Updater\\last_result.json`)
+- Diagnostics reads updater status instead of performing update decisions
+
 ## PHASE 7 - POLISH AND QUALITY OF LIFE
 
 Examples:

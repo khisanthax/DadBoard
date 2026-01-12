@@ -14,5 +14,11 @@ DadBoard is a simple Windows LAN dashboard to launch a selected Steam game on mu
 
 See `client/README-client.md` and `controller/README-controller.md` for details.
 
+## Update flow (current architecture)
+- `DadBoard.exe` is the runtime app only; it does not download or replace files.
+- `DadBoardUpdater.exe` checks for updates, downloads payloads, and invokes Setup.
+- `DadBoardSetup.exe` applies installs/repairs using a local payload zip.
+- Use the tray menu “Check for updates now” to launch the Updater.
+
 ## Release baseline note
 Releases prior to v0.1.0.1 may include binaries stamped as 1.0.0+<sha>, which breaks semver update ordering. Use v0.1.0.1 as the first correct-by-default baseline for update testing.

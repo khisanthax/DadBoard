@@ -3,11 +3,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
-using System.Net.Http;
-using System.Net.Http.Headers;
 using System.Text;
-using System.Text.Json;
-using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using DadBoard.Leader;
@@ -21,40 +17,20 @@ public sealed class DiagnosticsForm : Form
     private readonly TextBox _runningPath = new();
     private readonly TextBox _expectedPath = new();
     private readonly TextBox _version = new();
-    private readonly TextBox _updateChannel = new();
-    private readonly TextBox _updateSourceMode = new();
-    private readonly TextBox _availableVersion = new();
-    private readonly TextBox _updateDecision = new();
-    private readonly TextBox _updateSource = new();
-    private readonly TextBox _updatesDisabled = new();
-    private readonly TextBox _consecutiveFailures = new();
-    private readonly TextBox _updateLastResult = new();
-    private readonly TextBox _updateLastError = new();
-    private readonly TextBox _updateDisabledUntil = new();
-    private readonly TextBox _updateLastReset = new();
+    private readonly TextBox _updaterAction = new();
+    private readonly TextBox _updaterInstalled = new();
+    private readonly TextBox _updaterAvailable = new();
+    private readonly TextBox _updaterResult = new();
+    private readonly TextBox _updaterMessage = new();
+    private readonly TextBox _updaterManifest = new();
+    private readonly TextBox _updaterLastRun = new();
+    private readonly TextBox _updaterLogPath = new();
     private readonly TextBox _logsPath = new();
-    private readonly TextBox _updateError = new();
-    private readonly TextBox _mirrorStatus = new();
-    private readonly TextBox _mirrorHostUrl = new();
-    private readonly TextBox _mirrorLastManifest = new();
-    private readonly TextBox _mirrorLastDownload = new();
-    private readonly TextBox _mirrorCached = new();
-    private readonly TextBox _manifestUrlInput = new();
-    private readonly TextBox _localHostIpInput = new();
-    private readonly Button _saveManifestButton = new();
-    private readonly Button _selfTestButton = new();
-    private readonly Label _selfTestSummary = new();
-    private readonly TextBox _selfTestLog = new();
     private readonly ListView _agentVersions = new();
     private readonly Label _devWarning = new();
     private readonly Button _launchInstalledButton = new();
 
     private LeaderService? _leader;
-    private int _selfTestRunning;
-    private readonly System.Net.Http.HttpClient _selfTestHttp = new()
-    {
-        Timeout = TimeSpan.FromSeconds(5)
-    };
 
     public DiagnosticsForm(LeaderService? leader)
     {
@@ -65,34 +41,15 @@ public sealed class DiagnosticsForm : Form
 
         _layout.Dock = DockStyle.Fill;
         _layout.ColumnCount = 2;
-        _layout.RowCount = 26;
+        _layout.RowCount = 16;
         _layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
         _layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        for (var i = 0; i < 14; i++)
+        {
+            _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        }
         _layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         _devWarning.AutoSize = true;
@@ -109,26 +66,15 @@ public sealed class DiagnosticsForm : Form
         AddRow("Running exe", _runningPath, 1);
         AddRow("Expected install", _expectedPath, 2);
         AddRow("App version", _version, 3);
-        AddRow("Update channel", _updateChannel, 4);
-        AddRow("Update source mode", _updateSourceMode, 5);
-        AddRow("Available version", _availableVersion, 6);
-        AddRow("Update decision", _updateDecision, 7);
-        AddRow("Updates disabled", _updatesDisabled, 8);
-        AddRow("Consecutive failures", _consecutiveFailures, 9);
-        AddRow("Last update result", _updateLastResult, 10);
-        AddRow("Last update error", _updateLastError, 11);
-        AddRow("Disabled until", _updateDisabledUntil, 12);
-        AddRow("Last reset", _updateLastReset, 13);
-        AddRow("Update source", _updateSource, 14);
-        AddRow("Update source error", _updateError, 15);
-        AddRow("Advanced / Override manifest URL", BuildManifestEditor(), 16);
-        AddRow("Mirror status", _mirrorStatus, 17);
-        AddRow("Mirror host URL", _mirrorHostUrl, 18);
-        AddRow("Last manifest fetch", _mirrorLastManifest, 19);
-        AddRow("Last zip download", _mirrorLastDownload, 20);
-        AddRow("Cached versions", _mirrorCached, 21);
-        AddRow("Logs folder", _logsPath, 22);
-        AddRow("Update self-test", BuildSelfTestPanel(), 23);
+        AddRow("Updater action", _updaterAction, 4);
+        AddRow("Updater installed", _updaterInstalled, 5);
+        AddRow("Updater available", _updaterAvailable, 6);
+        AddRow("Updater result", _updaterResult, 7);
+        AddRow("Updater message", _updaterMessage, 8);
+        AddRow("Updater manifest", _updaterManifest, 9);
+        AddRow("Updater last run", _updaterLastRun, 10);
+        AddRow("Updater log", _updaterLogPath, 11);
+        AddRow("Logs folder", _logsPath, 12);
 
         var agentLabel = new Label
         {
@@ -136,7 +82,7 @@ public sealed class DiagnosticsForm : Form
             TextAlign = ContentAlignment.MiddleLeft,
             Dock = DockStyle.Fill
         };
-        _layout.Controls.Add(agentLabel, 0, 24);
+        _layout.Controls.Add(agentLabel, 0, 13);
 
         _agentVersions.View = View.Details;
         _agentVersions.FullRowSelect = true;
@@ -144,7 +90,7 @@ public sealed class DiagnosticsForm : Form
         _agentVersions.Columns.Add("PC", 200);
         _agentVersions.Columns.Add("Version", 120);
         _agentVersions.Dock = DockStyle.Fill;
-        _layout.Controls.Add(_agentVersions, 1, 24);
+        _layout.Controls.Add(_agentVersions, 1, 13);
 
         var buttonPanel = new FlowLayoutPanel
         {
@@ -171,7 +117,7 @@ public sealed class DiagnosticsForm : Form
         buttonPanel.Controls.Add(_launchInstalledButton);
 
         _layout.Controls.Add(_devWarning, 0, 0);
-        _layout.Controls.Add(buttonPanel, 0, 25);
+        _layout.Controls.Add(buttonPanel, 0, 15);
         _layout.SetColumnSpan(buttonPanel, 2);
 
         Controls.Add(_layout);
@@ -186,107 +132,20 @@ public sealed class DiagnosticsForm : Form
         _runningPath.Text = runningPath;
         _expectedPath.Text = DadBoardPaths.InstalledExePath;
         _version.Text = VersionUtil.GetCurrentVersion();
-        _updateChannel.Text = "Loading...";
-        _updateSourceMode.Text = "Loading...";
-        _availableVersion.Text = "Loading...";
-        _updateDecision.Text = "Loading...";
-        _updatesDisabled.Text = "Loading...";
-        _consecutiveFailures.Text = "Loading...";
-        _updateLastResult.Text = "Loading...";
-        _updateLastError.Text = "Loading...";
-        _updateDisabledUntil.Text = "Loading...";
-        _updateLastReset.Text = "Loading...";
-        _updateSource.Text = "Loading...";
-        _updateError.Text = "";
-        _logsPath.Text = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DadBoard", "logs");
+        _logsPath.Text = UpdaterStatusStore.LogDir;
+
+        _updaterAction.Text = "Loading...";
+        _updaterInstalled.Text = "Loading...";
+        _updaterAvailable.Text = "Loading...";
+        _updaterResult.Text = "Loading...";
+        _updaterMessage.Text = "Loading...";
+        _updaterManifest.Text = "Loading...";
+        _updaterLastRun.Text = "Loading...";
+        _updaterLogPath.Text = "Loading...";
 
         UpdateDevWarning(runningPath);
         UpdateAgentVersions();
-        LoadUpdateDetailsAsync();
-        UpdateMirrorDetails();
-    }
-
-    private Control BuildManifestEditor()
-    {
-        var panel = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.LeftToRight,
-            AutoSize = true
-        };
-
-        var manifestLabel = new Label
-        {
-            Text = "Manifest URL",
-            AutoSize = true,
-            TextAlign = ContentAlignment.MiddleLeft
-        };
-
-        var hostLabel = new Label
-        {
-            Text = "Local host IP",
-            AutoSize = true,
-            TextAlign = ContentAlignment.MiddleLeft
-        };
-
-        _manifestUrlInput.Width = 320;
-        _localHostIpInput.Width = 140;
-        _saveManifestButton.Text = "Save";
-        _saveManifestButton.AutoSize = true;
-        _saveManifestButton.Click += (_, _) => SaveManifestUrl();
-        var resetButton = new Button
-        {
-            Text = "Reset to default",
-            AutoSize = true
-        };
-        resetButton.Click += (_, _) => ResetManifestUrl();
-
-        panel.Controls.Add(manifestLabel);
-        panel.Controls.Add(_manifestUrlInput);
-        panel.Controls.Add(hostLabel);
-        panel.Controls.Add(_localHostIpInput);
-        panel.Controls.Add(_saveManifestButton);
-        panel.Controls.Add(resetButton);
-        return panel;
-    }
-
-    private Control BuildSelfTestPanel()
-    {
-        var panel = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 2
-        };
-        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-
-        var header = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            AutoSize = true,
-            FlowDirection = FlowDirection.LeftToRight
-        };
-
-        _selfTestButton.Text = "Self-test Update Pipeline";
-        _selfTestButton.AutoSize = true;
-        _selfTestButton.Click += async (_, _) => await RunSelfTestAsync();
-
-        _selfTestSummary.Text = "Not run";
-        _selfTestSummary.AutoSize = true;
-
-        header.Controls.Add(_selfTestButton);
-        header.Controls.Add(_selfTestSummary);
-
-        _selfTestLog.Multiline = true;
-        _selfTestLog.ReadOnly = true;
-        _selfTestLog.ScrollBars = ScrollBars.Vertical;
-        _selfTestLog.Height = 100;
-        _selfTestLog.Dock = DockStyle.Fill;
-
-        panel.Controls.Add(header, 0, 0);
-        panel.Controls.Add(_selfTestLog, 0, 1);
-        return panel;
+        LoadUpdaterStatusAsync();
     }
 
     private void UpdateDevWarning(string runningPath)
@@ -332,62 +191,11 @@ public sealed class DiagnosticsForm : Form
         }
     }
 
-    private void UpdateMirrorDetails()
+    private void LoadUpdaterStatusAsync()
     {
-        if (_leader == null)
+        _ = Task.Run(() =>
         {
-            _mirrorStatus.Text = "Leader disabled";
-            _mirrorHostUrl.Text = "";
-            _mirrorLastManifest.Text = "";
-            _mirrorLastDownload.Text = "";
-            _mirrorCached.Text = "";
-            return;
-        }
-
-        var snapshot = _leader.GetUpdateMirrorSnapshot();
-        _mirrorStatus.Text = snapshot.Enabled ? "Enabled" : "Disabled";
-        _mirrorHostUrl.Text = snapshot.LocalHostUrl;
-        _mirrorLastManifest.Text = string.IsNullOrWhiteSpace(snapshot.LastManifestFetchUtc)
-            ? snapshot.LastManifestResult
-            : $"{snapshot.LastManifestFetchUtc} ({snapshot.LastManifestResult})";
-        _mirrorLastDownload.Text = string.IsNullOrWhiteSpace(snapshot.LastDownloadUtc)
-            ? snapshot.LastDownloadResult
-            : $"{snapshot.LastDownloadUtc} ({snapshot.LastDownloadResult})";
-        _mirrorCached.Text = snapshot.CachedVersions;
-
-        if (string.IsNullOrWhiteSpace(_updateError.Text) && !string.IsNullOrWhiteSpace(snapshot.LastError))
-        {
-            _updateError.Text = snapshot.LastError;
-        }
-    }
-
-    private void LoadUpdateDetailsAsync()
-    {
-        _ = System.Threading.Tasks.Task.Run(() =>
-        {
-            UpdateConfig? config = null;
-            UpdateState? state = null;
-            string? error = null;
-
-            try
-            {
-                config = UpdateConfigStore.Load();
-            }
-            catch (Exception ex)
-            {
-                error = $"Config load failed: {ex.Message}";
-            }
-
-            try
-            {
-                state = UpdateStateStore.Load();
-            }
-            catch (Exception ex)
-            {
-                error = error ?? $"State load failed: {ex.Message}";
-            }
-
-            return (config, state, error);
+            return UpdaterStatusStore.Load();
         }).ContinueWith(task =>
         {
             if (IsDisposed || Disposing)
@@ -395,117 +203,28 @@ public sealed class DiagnosticsForm : Form
                 return;
             }
 
-            if (task.IsFaulted)
+            var status = task.IsFaulted ? null : task.Result;
+            if (status == null)
             {
-                _updateSource.Text = "Not configured";
-                _updateError.Text = task.Exception?.GetBaseException().Message ?? "Update info failed.";
+                _updaterAction.Text = "-";
+                _updaterInstalled.Text = "-";
+                _updaterAvailable.Text = "-";
+                _updaterResult.Text = "No updater status yet.";
+                _updaterMessage.Text = "-";
+                _updaterManifest.Text = "-";
+                _updaterLastRun.Text = "-";
+                _updaterLogPath.Text = Path.Combine(UpdaterStatusStore.LogDir, "updater.log");
                 return;
             }
 
-            var (config, state, error) = task.Result;
-            var resolved = config == null ? "" : UpdateConfigStore.ResolveManifestUrl(config);
-            var source = config?.ManifestUrl ?? "";
-            _manifestUrlInput.Text = string.IsNullOrWhiteSpace(source) ? resolved : source;
-            _localHostIpInput.Text = config?.LocalHostIp ?? "";
-            _updateChannel.Text = config == null ? "-" : config.UpdateChannel.ToString();
-            _updateSourceMode.Text = config == null ? "-" : config.UpdateSourceMode.ToString();
-            if (string.IsNullOrWhiteSpace(resolved))
-            {
-                _updateSource.Text = "Not configured";
-            }
-            else
-            {
-                var label = config != null && UpdateConfigStore.IsDefaultManifestUrl(config) ? "Default" : "Override";
-                _updateSource.Text = $"{label}: {resolved}";
-            }
-
-            if (!string.IsNullOrWhiteSpace(error))
-            {
-                _updateError.Text = error;
-                return;
-            }
-
-            if (state != null)
-            {
-                _updatesDisabled.Text = state.UpdatesDisabled ? "Yes" : "No";
-                _consecutiveFailures.Text = state.ConsecutiveFailures.ToString();
-                _updateLastResult.Text = string.IsNullOrWhiteSpace(state.LastResult) ? "-" : state.LastResult;
-                _updateLastError.Text = string.IsNullOrWhiteSpace(state.LastError) ? "-" : state.LastError;
-                _updateDisabledUntil.Text = string.IsNullOrWhiteSpace(state.DisabledUntilUtc) ? "-" : state.DisabledUntilUtc;
-                if (string.IsNullOrWhiteSpace(state.LastResetUtc))
-                {
-                    _updateLastReset.Text = "-";
-                }
-                else if (string.IsNullOrWhiteSpace(state.LastResetBy))
-                {
-                    _updateLastReset.Text = state.LastResetUtc;
-                }
-                else
-                {
-                    _updateLastReset.Text = $"{state.LastResetUtc} ({state.LastResetBy})";
-                }
-
-                if (state.UpdatesDisabled)
-                {
-                    _updateError.Text = "Updates disabled due to repeated failures.";
-                }
-                else if (!string.IsNullOrWhiteSpace(state.LastError))
-                {
-                    _updateError.Text = state.LastError;
-                }
-                else
-                {
-                    _updateError.Text = "None";
-                }
-            }
-            else
-            {
-                _updatesDisabled.Text = "-";
-                _consecutiveFailures.Text = "-";
-                _updateLastResult.Text = "-";
-                _updateLastError.Text = "-";
-                _updateDisabledUntil.Text = "-";
-                _updateLastReset.Text = "-";
-                _updateError.Text = "None";
-            }
-
-            LoadAvailableVersionAsync(resolved);
-        }, System.Threading.Tasks.TaskScheduler.FromCurrentSynchronizationContext());
-    }
-
-    private void LoadAvailableVersionAsync(string resolvedUrl)
-    {
-        if (string.IsNullOrWhiteSpace(resolvedUrl))
-        {
-            _availableVersion.Text = "-";
-            _updateDecision.Text = "Unknown";
-            return;
-        }
-
-        _ = Task.Run(async () =>
-        {
-            var manifest = await FetchManifestAsync(resolvedUrl).ConfigureAwait(false);
-            return manifest?.LatestVersion ?? "";
-        }).ContinueWith(task =>
-        {
-            if (IsDisposed || Disposing)
-            {
-                return;
-            }
-
-            var latest = task.IsFaulted ? "" : task.Result;
-            latest = VersionUtil.Normalize(latest);
-            if (string.IsNullOrWhiteSpace(latest))
-            {
-                _availableVersion.Text = "-";
-                _updateDecision.Text = "Unknown";
-                return;
-            }
-
-            _availableVersion.Text = latest;
-            var installed = VersionUtil.Normalize(_version.Text);
-            var decision = VersionUtil.Compare(latest, installed) > 0 ? "Update available" : "Up-to-date";
-            _updateDecision.Text = decision;
+            _updaterAction.Text = string.IsNullOrWhiteSpace(status.Action) ? "-" : status.Action;
+            _updaterInstalled.Text = string.IsNullOrWhiteSpace(status.InstalledVersion) ? "-" : status.InstalledVersion;
+            _updaterAvailable.Text = string.IsNullOrWhiteSpace(status.AvailableVersion) ? "-" : status.AvailableVersion;
+            _updaterResult.Text = string.IsNullOrWhiteSpace(status.Result) ? "-" : status.Result;
+            _updaterMessage.Text = string.IsNullOrWhiteSpace(status.Message) ? "-" : status.Message;
+            _updaterManifest.Text = string.IsNullOrWhiteSpace(status.ManifestUrl) ? "-" : status.ManifestUrl;
+            _updaterLastRun.Text = string.IsNullOrWhiteSpace(status.TimestampUtc) ? "-" : status.TimestampUtc;
+            _updaterLogPath.Text = string.IsNullOrWhiteSpace(status.LogPath) ? "-" : status.LogPath;
         }, TaskScheduler.FromCurrentSynchronizationContext());
     }
 
@@ -527,23 +246,14 @@ public sealed class DiagnosticsForm : Form
         sb.AppendLine($"Running exe: {_runningPath.Text}");
         sb.AppendLine($"Expected install: {_expectedPath.Text}");
         sb.AppendLine($"Version: {_version.Text}");
-        sb.AppendLine($"Update channel: {_updateChannel.Text}");
-        sb.AppendLine($"Update source mode: {_updateSourceMode.Text}");
-        sb.AppendLine($"Available version: {_availableVersion.Text}");
-        sb.AppendLine($"Update decision: {_updateDecision.Text}");
-        sb.AppendLine($"Updates disabled: {_updatesDisabled.Text}");
-        sb.AppendLine($"Consecutive failures: {_consecutiveFailures.Text}");
-        sb.AppendLine($"Last update result: {_updateLastResult.Text}");
-        sb.AppendLine($"Last update error: {_updateLastError.Text}");
-        sb.AppendLine($"Disabled until: {_updateDisabledUntil.Text}");
-        sb.AppendLine($"Last reset: {_updateLastReset.Text}");
-        sb.AppendLine($"Update source: {_updateSource.Text}");
-        sb.AppendLine($"Update source error: {_updateError.Text}");
-        sb.AppendLine($"Mirror status: {_mirrorStatus.Text}");
-        sb.AppendLine($"Mirror host URL: {_mirrorHostUrl.Text}");
-        sb.AppendLine($"Last manifest fetch: {_mirrorLastManifest.Text}");
-        sb.AppendLine($"Last zip download: {_mirrorLastDownload.Text}");
-        sb.AppendLine($"Cached versions: {_mirrorCached.Text}");
+        sb.AppendLine($"Updater action: {_updaterAction.Text}");
+        sb.AppendLine($"Updater installed: {_updaterInstalled.Text}");
+        sb.AppendLine($"Updater available: {_updaterAvailable.Text}");
+        sb.AppendLine($"Updater result: {_updaterResult.Text}");
+        sb.AppendLine($"Updater message: {_updaterMessage.Text}");
+        sb.AppendLine($"Updater manifest: {_updaterManifest.Text}");
+        sb.AppendLine($"Updater last run: {_updaterLastRun.Text}");
+        sb.AppendLine($"Updater log: {_updaterLogPath.Text}");
         sb.AppendLine($"Logs folder: {_logsPath.Text}");
 
         if (_leader != null)
@@ -559,209 +269,6 @@ public sealed class DiagnosticsForm : Form
         }
 
         Clipboard.SetText(sb.ToString());
-    }
-
-    private void SaveManifestUrl()
-    {
-        var url = _manifestUrlInput.Text.Trim();
-        var ipOverride = _localHostIpInput.Text.Trim();
-        var config = UpdateConfigStore.Load();
-        var defaultUrl = UpdateConfigStore.GetDefaultManifestUrl(config.UpdateChannel);
-        config.ManifestUrl = string.Equals(url, defaultUrl, StringComparison.OrdinalIgnoreCase) ? "" : url;
-        config.LocalHostIp = ipOverride;
-        config.Source = "github_mirror";
-        config.MirrorEnabled = true;
-        UpdateConfigStore.Save(config);
-        _leader?.ReloadUpdateConfig();
-        var resolved = UpdateConfigStore.ResolveManifestUrl(config);
-        var label = UpdateConfigStore.IsDefaultManifestUrl(config) ? "Default" : "Override";
-        _updateSource.Text = string.IsNullOrWhiteSpace(resolved) ? "Not configured" : $"{label}: {resolved}";
-        _updateError.Text = "None";
-        UpdateMirrorDetails();
-    }
-
-    private void ResetManifestUrl()
-    {
-        var config = UpdateConfigStore.Load();
-        config.ManifestUrl = "";
-        config.Source = "github_mirror";
-        config.MirrorEnabled = true;
-        config.LocalHostIp = "";
-        UpdateConfigStore.Save(config);
-        _manifestUrlInput.Text = UpdateConfigStore.ResolveManifestUrl(config);
-        _localHostIpInput.Text = config.LocalHostIp;
-        _leader?.ReloadUpdateConfig();
-        _updateSource.Text = $"Default: {UpdateConfigStore.ResolveManifestUrl(config)}";
-        _updateError.Text = "None";
-        UpdateMirrorDetails();
-    }
-
-    private async Task RunSelfTestAsync()
-    {
-        if (_leader == null)
-        {
-            MessageBox.Show("Enable Leader to run the update self-test.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return;
-        }
-
-        if (Interlocked.Exchange(ref _selfTestRunning, 1) == 1)
-        {
-            return;
-        }
-
-        _selfTestButton.Enabled = false;
-        _selfTestSummary.Text = "Running...";
-        _selfTestLog.Clear();
-
-        var passed = true;
-
-        try
-        {
-            AppendSelfTest("Step A: Loading update.config.json...");
-            var config = await Task.Run(UpdateConfigStore.Load).ConfigureAwait(true);
-            var (hostUrl, reason) = _leader.GetLocalUpdateHostUrlWithReason();
-            var resolved = UpdateConfigStore.ResolveManifestUrl(config);
-            var sourceLabel = UpdateConfigStore.IsDefaultManifestUrl(config) ? "default" : "override";
-            AppendSelfTest($"Config source={config.Source} channel={config.UpdateChannel} manifest_url={resolved} ({sourceLabel})");
-            AppendSelfTest($"mirror_enabled={config.MirrorEnabled} poll_minutes={config.MirrorPollMinutes} local_host={hostUrl} ({reason})");
-
-            AppendSelfTest("Step B: Fetching GitHub manifest...");
-            if (string.IsNullOrWhiteSpace(resolved))
-            {
-                passed = false;
-                AppendSelfTest("FAIL: manifest_url not configured.");
-            }
-            else
-            {
-                var manifest = await FetchManifestAsync(resolved).ConfigureAwait(true);
-                if (manifest == null)
-                {
-                    passed = false;
-                    AppendSelfTest("FAIL: Unable to fetch/parse manifest.");
-                }
-                else
-                {
-                    AppendSelfTest($"OK: latest_version={manifest.LatestVersion} package_url={manifest.PackageUrl}");
-                }
-            }
-
-            AppendSelfTest("Step C: Checking mirror cache...");
-            var cacheDir = Path.Combine(DadBoardPaths.UpdateSourceDir, "cache");
-            if (!Directory.Exists(cacheDir))
-            {
-                AppendSelfTest($"Cache folder missing: {cacheDir}");
-            }
-            else
-            {
-                var files = Directory.GetFiles(cacheDir, "DadBoard-*.zip");
-                if (files.Length == 0)
-                {
-                    AppendSelfTest("Cache zips=0 newest=none");
-                }
-                else
-                {
-                    var newest = files.OrderByDescending(File.GetLastWriteTimeUtc).First();
-                    var newestTime = File.GetLastWriteTimeUtc(newest).ToString("O");
-                    var names = string.Join(", ", files.Select(Path.GetFileName));
-                    AppendSelfTest($"Cache zips={files.Length} newest={Path.GetFileName(newest)} mtime={newestTime}");
-                    AppendSelfTest($"Cache files: {names}");
-                }
-            }
-
-            AppendSelfTest("Step D: Fetching leader-hosted manifest...");
-            var leaderManifestUrl = $"{hostUrl}/updates/latest.json";
-            var localManifest = await FetchManifestAsync(leaderManifestUrl).ConfigureAwait(true);
-            if (localManifest == null)
-            {
-                passed = false;
-                AppendSelfTest("FAIL: Unable to fetch leader manifest.");
-            }
-            else
-            {
-                var uri = new Uri(localManifest.PackageUrl);
-                AppendSelfTest($"OK: leader package_url host={uri.Host} port={uri.Port}");
-            }
-
-            if (localManifest != null)
-            {
-                AppendSelfTest("Step E: Checking leader-hosted zip...");
-                var ok = await CheckZipAsync(localManifest.PackageUrl).ConfigureAwait(true);
-                if (!ok)
-                {
-                    passed = false;
-                    AppendSelfTest("FAIL: leader zip check failed.");
-                }
-                else
-                {
-                    AppendSelfTest("OK: leader zip accessible.");
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            passed = false;
-            AppendSelfTest($"FAIL: {ex.Message}");
-        }
-        finally
-        {
-            _selfTestSummary.Text = passed ? "PASS" : "FAIL";
-            _selfTestButton.Enabled = true;
-            Interlocked.Exchange(ref _selfTestRunning, 0);
-        }
-    }
-
-    private async Task<UpdateManifest?> FetchManifestAsync(string url)
-    {
-        try
-        {
-            var json = await _selfTestHttp.GetStringAsync(url).ConfigureAwait(true);
-            return JsonSerializer.Deserialize<UpdateManifest>(json, JsonUtil.Options);
-        }
-        catch (Exception ex)
-        {
-            AppendSelfTest($"Manifest fetch error: {ex.Message}");
-            return null;
-        }
-    }
-
-    private async Task<bool> CheckZipAsync(string url)
-    {
-        try
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Get, url);
-            request.Headers.Range = new RangeHeaderValue(0, 0);
-            using var response = await _selfTestHttp.SendAsync(request).ConfigureAwait(true);
-            if (!response.IsSuccessStatusCode)
-            {
-                AppendSelfTest($"Zip check HTTP {(int)response.StatusCode} {response.ReasonPhrase}");
-                return false;
-            }
-
-            var length = response.Content.Headers.ContentLength ?? 0;
-            if (length <= 0)
-            {
-                AppendSelfTest("Zip check content-length missing/zero.");
-                return false;
-            }
-
-            return true;
-        }
-        catch (Exception ex)
-        {
-            AppendSelfTest($"Zip check error: {ex.Message}");
-            return false;
-        }
-    }
-
-    private void AppendSelfTest(string message)
-    {
-        if (InvokeRequired)
-        {
-            BeginInvoke(new Action<string>(AppendSelfTest), message);
-            return;
-        }
-
-        _selfTestLog.AppendText($"{DateTime.Now:HH:mm:ss} {message}{Environment.NewLine}");
     }
 
     private void LaunchInstalledAppAndExit()

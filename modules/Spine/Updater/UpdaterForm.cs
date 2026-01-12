@@ -16,10 +16,12 @@ sealed class UpdaterForm : Form
     private readonly UpdaterEngine _engine = new();
     private readonly UpdaterLogger _logger;
     private readonly CancellationTokenSource _cts = new();
+    private readonly bool _forceRepair;
     private bool _busy;
 
-    public UpdaterForm()
+    public UpdaterForm(bool forceRepair)
     {
+        _forceRepair = forceRepair;
         Text = "DadBoard Updater";
         Size = new Size(720, 480);
         StartPosition = FormStartPosition.CenterScreen;
@@ -36,7 +38,7 @@ sealed class UpdaterForm : Form
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-        _statusLabel.Text = "Ready.";
+        _statusLabel.Text = _forceRepair ? "Ready to repair." : "Ready.";
         _statusLabel.AutoSize = true;
 
         _logBox.Multiline = true;
@@ -44,7 +46,7 @@ sealed class UpdaterForm : Form
         _logBox.ScrollBars = ScrollBars.Vertical;
         _logBox.Dock = DockStyle.Fill;
 
-        _checkButton.Text = "Check Nightly Now";
+        _checkButton.Text = _forceRepair ? "Run Repair Now" : "Check Nightly Now";
         _checkButton.AutoSize = true;
         _checkButton.Click += async (_, _) => await RunUpdateAsync();
 
@@ -80,18 +82,22 @@ sealed class UpdaterForm : Form
 
         _busy = true;
         _checkButton.Enabled = false;
-        _statusLabel.Text = "Checking for updates...";
-        AppendLog("Starting update check.");
+        _statusLabel.Text = _forceRepair ? "Preparing repair..." : "Checking for updates...";
+        AppendLog(_forceRepair ? "Starting repair." : "Starting update check.");
 
         try
         {
             var config = UpdateConfigStore.Load();
-            var result = await _engine.RunAsync(config, _cts.Token, AppendLog).ConfigureAwait(true);
+            var action = _forceRepair ? "repair" : "check";
+            var result = await _engine.RunAsync(config, _forceRepair, action, _logger.LogPath, _cts.Token, AppendLog)
+                .ConfigureAwait(true);
 
             switch (result.State)
             {
                 case UpdaterState.UpToDate:
-                    _statusLabel.Text = $"Up to date ({result.Version}).";
+                    _statusLabel.Text = _forceRepair
+                        ? $"Repair complete ({result.Version})."
+                        : $"Up to date ({result.Version}).";
                     break;
                 case UpdaterState.Updated:
                     _statusLabel.Text = $"Update applied ({result.Version}).";
