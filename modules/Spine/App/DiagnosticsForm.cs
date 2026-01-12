@@ -18,12 +18,15 @@ public sealed class DiagnosticsForm : Form
     private readonly TextBox _expectedPath = new();
     private readonly TextBox _version = new();
     private readonly TextBox _updaterAction = new();
+    private readonly TextBox _updaterInvocation = new();
+    private readonly TextBox _updaterChannel = new();
     private readonly TextBox _updaterInstalled = new();
     private readonly TextBox _updaterAvailable = new();
     private readonly TextBox _updaterResult = new();
     private readonly TextBox _updaterMessage = new();
     private readonly TextBox _updaterManifest = new();
     private readonly TextBox _updaterLastRun = new();
+    private readonly TextBox _updaterExitCode = new();
     private readonly TextBox _updaterLogPath = new();
     private readonly TextBox _logsPath = new();
     private readonly ListView _agentVersions = new();
@@ -41,11 +44,11 @@ public sealed class DiagnosticsForm : Form
 
         _layout.Dock = DockStyle.Fill;
         _layout.ColumnCount = 2;
-        _layout.RowCount = 16;
+        _layout.RowCount = 18;
         _layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
         _layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
-        for (var i = 0; i < 14; i++)
+        for (var i = 0; i < 16; i++)
         {
             _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         }
@@ -67,14 +70,17 @@ public sealed class DiagnosticsForm : Form
         AddRow("Expected install", _expectedPath, 2);
         AddRow("App version", _version, 3);
         AddRow("Updater action", _updaterAction, 4);
-        AddRow("Updater installed", _updaterInstalled, 5);
-        AddRow("Updater available", _updaterAvailable, 6);
-        AddRow("Updater result", _updaterResult, 7);
-        AddRow("Updater message", _updaterMessage, 8);
-        AddRow("Updater manifest", _updaterManifest, 9);
-        AddRow("Updater last run", _updaterLastRun, 10);
-        AddRow("Updater log", _updaterLogPath, 11);
-        AddRow("Logs folder", _logsPath, 12);
+        AddRow("Updater invocation", _updaterInvocation, 5);
+        AddRow("Updater channel", _updaterChannel, 6);
+        AddRow("Updater installed", _updaterInstalled, 7);
+        AddRow("Updater available", _updaterAvailable, 8);
+        AddRow("Updater result", _updaterResult, 9);
+        AddRow("Updater message", _updaterMessage, 10);
+        AddRow("Updater manifest", _updaterManifest, 11);
+        AddRow("Updater last run", _updaterLastRun, 12);
+        AddRow("Updater exit code", _updaterExitCode, 13);
+        AddRow("Updater log", _updaterLogPath, 14);
+        AddRow("Logs folder", _logsPath, 15);
 
         var agentLabel = new Label
         {
@@ -82,7 +88,7 @@ public sealed class DiagnosticsForm : Form
             TextAlign = ContentAlignment.MiddleLeft,
             Dock = DockStyle.Fill
         };
-        _layout.Controls.Add(agentLabel, 0, 13);
+        _layout.Controls.Add(agentLabel, 0, 16);
 
         _agentVersions.View = View.Details;
         _agentVersions.FullRowSelect = true;
@@ -90,7 +96,7 @@ public sealed class DiagnosticsForm : Form
         _agentVersions.Columns.Add("PC", 200);
         _agentVersions.Columns.Add("Version", 120);
         _agentVersions.Dock = DockStyle.Fill;
-        _layout.Controls.Add(_agentVersions, 1, 13);
+        _layout.Controls.Add(_agentVersions, 1, 16);
 
         var buttonPanel = new FlowLayoutPanel
         {
@@ -117,7 +123,7 @@ public sealed class DiagnosticsForm : Form
         buttonPanel.Controls.Add(_launchInstalledButton);
 
         _layout.Controls.Add(_devWarning, 0, 0);
-        _layout.Controls.Add(buttonPanel, 0, 15);
+        _layout.Controls.Add(buttonPanel, 0, 17);
         _layout.SetColumnSpan(buttonPanel, 2);
 
         Controls.Add(_layout);
@@ -135,12 +141,15 @@ public sealed class DiagnosticsForm : Form
         _logsPath.Text = UpdaterStatusStore.LogDir;
 
         _updaterAction.Text = "Loading...";
+        _updaterInvocation.Text = "Loading...";
+        _updaterChannel.Text = "Loading...";
         _updaterInstalled.Text = "Loading...";
         _updaterAvailable.Text = "Loading...";
         _updaterResult.Text = "Loading...";
         _updaterMessage.Text = "Loading...";
         _updaterManifest.Text = "Loading...";
         _updaterLastRun.Text = "Loading...";
+        _updaterExitCode.Text = "Loading...";
         _updaterLogPath.Text = "Loading...";
 
         UpdateDevWarning(runningPath);
@@ -218,12 +227,15 @@ public sealed class DiagnosticsForm : Form
             }
 
             _updaterAction.Text = string.IsNullOrWhiteSpace(status.Action) ? "-" : status.Action;
+            _updaterInvocation.Text = string.IsNullOrWhiteSpace(status.Invocation) ? "-" : status.Invocation;
+            _updaterChannel.Text = string.IsNullOrWhiteSpace(status.Channel) ? "-" : status.Channel;
             _updaterInstalled.Text = string.IsNullOrWhiteSpace(status.InstalledVersion) ? "-" : status.InstalledVersion;
-            _updaterAvailable.Text = string.IsNullOrWhiteSpace(status.AvailableVersion) ? "-" : status.AvailableVersion;
+            _updaterAvailable.Text = string.IsNullOrWhiteSpace(status.LatestVersion) ? "-" : status.LatestVersion;
             _updaterResult.Text = string.IsNullOrWhiteSpace(status.Result) ? "-" : status.Result;
-            _updaterMessage.Text = string.IsNullOrWhiteSpace(status.Message) ? "-" : status.Message;
+            _updaterMessage.Text = string.IsNullOrWhiteSpace(status.ErrorMessage) ? status.Message : status.ErrorMessage;
             _updaterManifest.Text = string.IsNullOrWhiteSpace(status.ManifestUrl) ? "-" : status.ManifestUrl;
             _updaterLastRun.Text = string.IsNullOrWhiteSpace(status.TimestampUtc) ? "-" : status.TimestampUtc;
+            _updaterExitCode.Text = status.ExitCode == 0 ? "-" : status.ExitCode.ToString();
             _updaterLogPath.Text = string.IsNullOrWhiteSpace(status.LogPath) ? "-" : status.LogPath;
         }, TaskScheduler.FromCurrentSynchronizationContext());
     }
@@ -247,12 +259,15 @@ public sealed class DiagnosticsForm : Form
         sb.AppendLine($"Expected install: {_expectedPath.Text}");
         sb.AppendLine($"Version: {_version.Text}");
         sb.AppendLine($"Updater action: {_updaterAction.Text}");
+        sb.AppendLine($"Updater invocation: {_updaterInvocation.Text}");
+        sb.AppendLine($"Updater channel: {_updaterChannel.Text}");
         sb.AppendLine($"Updater installed: {_updaterInstalled.Text}");
         sb.AppendLine($"Updater available: {_updaterAvailable.Text}");
         sb.AppendLine($"Updater result: {_updaterResult.Text}");
         sb.AppendLine($"Updater message: {_updaterMessage.Text}");
         sb.AppendLine($"Updater manifest: {_updaterManifest.Text}");
         sb.AppendLine($"Updater last run: {_updaterLastRun.Text}");
+        sb.AppendLine($"Updater exit code: {_updaterExitCode.Text}");
         sb.AppendLine($"Updater log: {_updaterLogPath.Text}");
         sb.AppendLine($"Logs folder: {_logsPath.Text}");
 

@@ -20,5 +20,23 @@ See `client/README-client.md` and `controller/README-controller.md` for details.
 - `DadBoardSetup.exe` applies installs/repairs using a local payload zip.
 - Use the tray menu “Check for updates now” to launch the Updater.
 
+## Updater scheduling and status
+Status file:
+- `%LOCALAPPDATA%\\DadBoard\\Updater\\last_result.json`
+
+Exit codes:
+- 0 = success (up-to-date or update applied)
+- 2 = invalid arguments
+- 3 = network failure (manifest fetch)
+- 4 = download failure (payload)
+- 5 = setup invocation failure
+- 6 = setup failed (non-zero)
+- 7 = status store write failure
+
+Schedule examples:
+- `DadBoardUpdater.exe schedule install --channel nightly --time 03:00 --jitter-min 30`
+- `DadBoardUpdater.exe schedule status`
+- `DadBoardUpdater.exe schedule remove`
+
 ## Release baseline note
 Releases prior to v0.1.0.1 may include binaries stamped as 1.0.0+<sha>, which breaks semver update ordering. Use v0.1.0.1 as the first correct-by-default baseline for update testing.

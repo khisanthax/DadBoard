@@ -94,7 +94,7 @@ sealed class UpdaterForm : Form
         {
             var config = UpdateConfigStore.Load();
             var action = _forceRepair ? "repair" : "check";
-            var result = await _engine.RunAsync(config, _forceRepair, action, _logger.LogPath, _cts.Token, AppendLog)
+            var result = await _engine.RunAsync(config, _forceRepair, action, "interactive", _logger.LogPath, _cts.Token, AppendLog)
                 .ConfigureAwait(true);
 
             switch (result.State)

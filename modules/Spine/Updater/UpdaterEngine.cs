@@ -24,14 +24,18 @@ sealed class UpdaterEngine
         UpdateConfig config,
         bool forceRepair,
         string action,
+        string invocation,
         string logPath,
         CancellationToken ct,
         Action<string> log)
     {
         var status = new UpdaterStatus
         {
-            TimestampUtc = DateTime.UtcNow.ToString("O"),
+            SchemaVersion = 1,
+            TimestampUtc = DateTimeOffset.UtcNow.ToString("O"),
             Action = action,
+            Invocation = invocation,
+            Channel = config.UpdateChannel.ToString().ToLowerInvariant(),
             LogPath = logPath ?? ""
         };
 
@@ -41,10 +45,7 @@ sealed class UpdaterEngine
             status.ManifestUrl = manifestUrl ?? "";
             if (string.IsNullOrWhiteSpace(manifestUrl))
             {
-                status.Result = "failed";
-                status.Message = "Update source not configured.";
-                UpdaterStatusStore.Save(status);
-                return UpdaterResult.Failed(status.Message);
+                return Fail(status, UpdaterExitCode.NetworkFailure, "network_failure", "Update source not configured.", log);
             }
 
             log($"Channel={config.UpdateChannel} manifest={manifestUrl}");
@@ -56,30 +57,28 @@ sealed class UpdaterEngine
             var manifest = await TryLoadManifestAsync(manifestUrl, ct, log).ConfigureAwait(false);
             if (manifest == null)
             {
-                status.Result = "failed";
-                status.Message = "Failed to load update manifest.";
-                UpdaterStatusStore.Save(status);
-                return UpdaterResult.Failed(status.Message);
+                return Fail(status, UpdaterExitCode.NetworkFailure, "network_failure", "Failed to load update manifest.", log);
             }
 
             var latest = VersionUtil.Normalize(manifest.LatestVersion);
-            status.AvailableVersion = latest;
+            status.LatestVersion = latest;
             log($"Available version={latest}");
 
             if (!forceRepair && VersionUtil.Compare(latest, installedVersion) <= 0)
             {
+                status.Success = true;
+                status.ExitCode = (int)UpdaterExitCode.Success;
                 status.Result = "up-to-date";
+                status.Action = "checked";
                 status.Message = "Already up to date.";
-                UpdaterStatusStore.Save(status);
-                return UpdaterResult.UpToDate(latest);
+                status.AvailableVersion = latest;
+                SaveStatus(status, log);
+                return UpdaterResult.UpToDate(latest, UpdaterExitCode.Success);
             }
 
             if (string.IsNullOrWhiteSpace(manifest.PackageUrl))
             {
-                status.Result = "failed";
-                status.Message = "Update manifest is missing package_url.";
-                UpdaterStatusStore.Save(status);
-                return UpdaterResult.Failed(status.Message);
+                return Fail(status, UpdaterExitCode.NetworkFailure, "network_failure", "Update manifest is missing package_url.", log);
             }
 
             if (forceRepair)
@@ -88,8 +87,16 @@ sealed class UpdaterEngine
             }
 
             var packageFile = GetPackagePath(manifest.PackageUrl, latest);
+            status.PayloadPath = packageFile;
             log($"Downloading package to {packageFile}");
-            await DownloadPackageAsync(manifest.PackageUrl, packageFile, ct, log).ConfigureAwait(false);
+            try
+            {
+                await DownloadPackageAsync(manifest.PackageUrl, packageFile, ct, log).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                return Fail(status, UpdaterExitCode.DownloadFailure, "download_failure", ex.Message, log);
+            }
 
             if (!string.IsNullOrWhiteSpace(manifest.Sha256))
             {
@@ -97,10 +104,7 @@ sealed class UpdaterEngine
                 var actual = HashUtil.ComputeSha256(packageFile);
                 if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
                 {
-                    status.Result = "failed";
-                    status.Message = "SHA256 mismatch for update package.";
-                    UpdaterStatusStore.Save(status);
-                    return UpdaterResult.Failed(status.Message);
+                    return Fail(status, UpdaterExitCode.DownloadFailure, "download_failure", "SHA256 mismatch for update package.", log);
                 }
             }
 
@@ -110,37 +114,55 @@ sealed class UpdaterEngine
             var setupExe = ok && File.Exists(stagedSetup) ? stagedSetup : DadBoardPaths.SetupExePath;
             if (!File.Exists(setupExe))
             {
-                status.Result = "failed";
-                status.Message = "DadBoardSetup.exe not found.";
-                UpdaterStatusStore.Save(status);
-                return UpdaterResult.Failed(status.Message);
+                return Fail(status, UpdaterExitCode.SetupInvokeFailure, "setup_not_found", "DadBoardSetup.exe not found.", log);
             }
             if (!string.Equals(setupExe, DadBoardPaths.SetupExePath, StringComparison.OrdinalIgnoreCase))
             {
                 log($"Using staged setup: {setupExe}");
             }
 
+            status.Action = forceRepair ? "repair" : "invoked_setup";
             var exitCode = await LaunchSetupAsync(setupExe, packageFile, ct, log).ConfigureAwait(false);
+            status.SetupExitCode = exitCode;
             if (exitCode != 0)
             {
-                status.Result = "failed";
-                status.Message = $"DadBoardSetup.exe exited with code {exitCode}.";
-                UpdaterStatusStore.Save(status);
-                return UpdaterResult.Failed(status.Message);
+                return Fail(status, UpdaterExitCode.SetupFailed, "setup_failed", $"DadBoardSetup.exe exited with code {exitCode}.", log);
             }
 
+            status.Success = true;
+            status.ExitCode = (int)UpdaterExitCode.Success;
             status.Result = "updated";
-            status.Message = "Update applied.";
-            UpdaterStatusStore.Save(status);
-            return UpdaterResult.Updated(latest);
+            status.Action = forceRepair ? "repair" : "updated";
+            status.Message = forceRepair ? "Repair applied." : "Update applied.";
+            status.AvailableVersion = latest;
+            SaveStatus(status, log);
+            return UpdaterResult.Updated(latest, UpdaterExitCode.Success);
         }
         catch (Exception ex)
         {
-            status.Result = "failed";
-            status.Message = ex.Message;
-            UpdaterStatusStore.Save(status);
-            log($"Updater failed: {ex}");
-            return UpdaterResult.Failed(ex.Message);
+            return Fail(status, UpdaterExitCode.UnknownFailure, "unknown_failure", ex.Message, log, ex);
+        }
+    }
+
+    private static UpdaterResult Fail(UpdaterStatus status, UpdaterExitCode code, string errorCode, string message, Action<string> log, Exception? ex = null)
+    {
+        status.Success = false;
+        status.ExitCode = (int)code;
+        status.ErrorCode = errorCode;
+        status.ErrorMessage = message;
+        status.Result = "failed";
+        status.Action = "failed";
+        status.Message = message;
+        SaveStatus(status, log);
+        log(ex == null ? message : $"Updater failed: {ex}");
+        return UpdaterResult.Failed(message, code);
+    }
+
+    private static void SaveStatus(UpdaterStatus status, Action<string> log)
+    {
+        if (!UpdaterStatusStore.Save(status))
+        {
+            log("Failed to write last_result.json.");
         }
     }
 
@@ -324,22 +346,24 @@ sealed class UpdaterResult
     public UpdaterState State { get; }
     public string Message { get; }
     public string? Version { get; }
+    public UpdaterExitCode ExitCode { get; }
 
-    private UpdaterResult(UpdaterState state, string message, string? version)
+    private UpdaterResult(UpdaterState state, string message, string? version, UpdaterExitCode exitCode)
     {
         State = state;
         Message = message;
         Version = version;
+        ExitCode = exitCode;
     }
 
-    public static UpdaterResult UpToDate(string? version)
-        => new(UpdaterState.UpToDate, "Already up to date.", version);
+    public static UpdaterResult UpToDate(string? version, UpdaterExitCode exitCode)
+        => new(UpdaterState.UpToDate, "Already up to date.", version, exitCode);
 
-    public static UpdaterResult Updated(string? version)
-        => new(UpdaterState.Updated, "Update applied.", version);
+    public static UpdaterResult Updated(string? version, UpdaterExitCode exitCode)
+        => new(UpdaterState.Updated, "Update applied.", version, exitCode);
 
-    public static UpdaterResult Failed(string message)
-        => new(UpdaterState.Failed, message, null);
+    public static UpdaterResult Failed(string message, UpdaterExitCode exitCode)
+        => new(UpdaterState.Failed, message, null, exitCode);
 }
 
 enum UpdaterState
@@ -347,4 +371,16 @@ enum UpdaterState
     UpToDate,
     Updated,
     Failed
+}
+
+enum UpdaterExitCode
+{
+    Success = 0,
+    InvalidArgs = 2,
+    NetworkFailure = 3,
+    DownloadFailure = 4,
+    SetupInvokeFailure = 5,
+    SetupFailed = 6,
+    StatusWriteFailure = 7,
+    UnknownFailure = 8
 }

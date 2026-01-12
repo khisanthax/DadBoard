@@ -292,6 +292,15 @@ Delivered:
 - Updater UI only auto-runs when launched with `--auto`; manual open stays idle
 - Update status dialog is copyable (text box + Copy button)
 
+## PHASE 4 - UPDATER PRODUCT-GRADE (SCHEDULING + STATUS) (DONE)
+
+Delivered:
+- Scheduled task support: `schedule install/remove/status` with jitter
+- Stable `last_result.json` schema with atomic writes
+- Stable exit codes (documented in README)
+- Silent runs never show UI and always write status/logs
+- Trigger CLI entrypoint (`trigger --reason ...`)
+
 ## PHASE 7 - POLISH AND QUALITY OF LIFE
 
 Examples:
