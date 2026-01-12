@@ -440,6 +440,7 @@ public static class SetupOperations
             var startInfo = new ProcessStartInfo
             {
                 FileName = exePath,
+                Arguments = "--mode agent --minimized --no-first-run",
                 WorkingDirectory = DadBoardPaths.InstallDir,
                 UseShellExecute = true
             };
