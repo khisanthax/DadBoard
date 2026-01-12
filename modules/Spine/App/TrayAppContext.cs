@@ -70,9 +70,9 @@ sealed class TrayAppContext : ApplicationContext
         _startLeaderOnLoginItem.CheckedChanged += (_, _) => ToggleStartLeaderOnLogin();
 
         _installItem = new ToolStripMenuItem("Install (Admin)", null, (_, _) => Install());
-        _checkUpdatesItem = new ToolStripMenuItem("Check for updates now", null, (_, _) => _ = RunUpdaterAsync("check --interactive"));
+        _checkUpdatesItem = new ToolStripMenuItem("Check for updates now", null, (_, _) => _ = RunUpdaterAsync("check --interactive --auto"));
         _viewUpdateStatusItem = new ToolStripMenuItem("View update status/log", null, (_, _) => ShowUpdateStatus());
-        _repairItem = new ToolStripMenuItem("Repair / Reinstall", null, (_, _) => _ = RunUpdaterAsync("repair --interactive"));
+        _repairItem = new ToolStripMenuItem("Repair / Reinstall", null, (_, _) => _ = RunUpdaterAsync("repair --interactive --auto"));
         _resetUpdateFailuresItem = new ToolStripMenuItem("Reset Update Failures (This PC)", null, (_, _) => ResetUpdateFailuresLocal());
         _statusItem = new ToolStripMenuItem("Show Status", null, (_, _) => ShowStatus());
         _diagnosticsItem = new ToolStripMenuItem("Diagnostics", null, (_, _) => ShowDiagnostics());
@@ -393,7 +393,48 @@ sealed class TrayAppContext : ApplicationContext
             $"Last run: {status.TimestampUtc}{Environment.NewLine}" +
             $"Log: {status.LogPath}";
 
-        MessageBox.Show(message, "DadBoard Update Status", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        using var dialog = new Form
+        {
+            Text = "DadBoard Update Status",
+            Size = new Size(640, 360),
+            StartPosition = FormStartPosition.CenterParent
+        };
+
+        var textBox = new TextBox
+        {
+            Multiline = true,
+            ReadOnly = true,
+            Dock = DockStyle.Fill,
+            ScrollBars = ScrollBars.Vertical,
+            Text = message
+        };
+
+        var copyButton = new Button
+        {
+            Text = "Copy",
+            AutoSize = true
+        };
+        copyButton.Click += (_, _) => Clipboard.SetText(message);
+
+        var closeButton = new Button
+        {
+            Text = "Close",
+            AutoSize = true
+        };
+        closeButton.Click += (_, _) => dialog.Close();
+
+        var buttons = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Bottom,
+            FlowDirection = FlowDirection.RightToLeft,
+            AutoSize = true
+        };
+        buttons.Controls.Add(closeButton);
+        buttons.Controls.Add(copyButton);
+
+        dialog.Controls.Add(textBox);
+        dialog.Controls.Add(buttons);
+        dialog.ShowDialog();
     }
 
     private bool TryLaunchExecutable(string label, string exePath, string args, string installDir, out string error)

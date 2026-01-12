@@ -12,6 +12,7 @@ static class Program
     static int Main(string[] args)
     {
         var silent = HasArg(args, "--silent") || HasArg(args, "/silent");
+        var autoRun = HasArg(args, "--auto") || HasArg(args, "/auto");
         var action = ParseAction(args);
         var manifestOverride = GetArgValue(args, "--manifest");
         if (silent)
@@ -20,7 +21,7 @@ static class Program
         }
 
         ApplicationConfiguration.Initialize();
-        Application.Run(new UpdaterForm(action == UpdaterAction.Repair));
+        Application.Run(new UpdaterForm(action == UpdaterAction.Repair, autoRun));
         return 0;
     }
 

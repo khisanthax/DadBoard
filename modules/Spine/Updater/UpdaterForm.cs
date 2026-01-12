@@ -17,11 +17,13 @@ sealed class UpdaterForm : Form
     private readonly UpdaterLogger _logger;
     private readonly CancellationTokenSource _cts = new();
     private readonly bool _forceRepair;
+    private readonly bool _autoRun;
     private bool _busy;
 
-    public UpdaterForm(bool forceRepair)
+    public UpdaterForm(bool forceRepair, bool autoRun)
     {
         _forceRepair = forceRepair;
+        _autoRun = autoRun;
         Text = "DadBoard Updater";
         Size = new Size(720, 480);
         StartPosition = FormStartPosition.CenterScreen;
@@ -69,7 +71,10 @@ sealed class UpdaterForm : Form
 
         Controls.Add(layout);
 
-        Shown += async (_, _) => await RunUpdateAsync();
+        if (_autoRun)
+        {
+            Shown += async (_, _) => await RunUpdateAsync();
+        }
         FormClosed += (_, _) => _logger.Dispose();
     }
 
