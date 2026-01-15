@@ -210,6 +210,11 @@ sealed class TrayAppContext : ApplicationContext
 
     public void HandleActivateSignal()
     {
+        if (_options.StartMinimized || _options.Mode == AppMode.Agent)
+        {
+            return;
+        }
+
         _uiContext.Post(_ => ShowStatus(), null);
     }
 
