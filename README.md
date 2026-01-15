@@ -1,30 +1,37 @@
-﻿# DadBoard
+DadBoard
 
-DadBoard is a simple Windows LAN dashboard to launch a selected Steam game on multiple PCs and help Dad coordinate invites/accepts. It uses scheduled tasks and per-PC status files shared via hidden SMB shares.
+DadBoard is a Windows LAN orchestration app for multi-PC family gaming. It provides a leader dashboard, per-PC agents, and a reliable self-update pipeline.
 
-## Repo layout
-- client/: setup script and local action scripts run by scheduled tasks
-- controller/: Tkinter dashboard app + config and game list
+Architecture (locked)
+- DadBoard.exe: runtime + tray/dashboard/leader/agent; no update logic.
+- DadBoardUpdater.exe: decides updates, downloads payloads, invokes Setup.
+- DadBoardSetup.exe: installer/executor only (stop/wait/unlock/replace/restart).
 
-## Quick start
-1) Edit `shared/config.json` with PC names and voice task names.
-2) Edit `controller/games.json` with your Steam AppIDs and game process names.
-3) Run `client/Setup-Client.ps1` locally on each PC (as admin).
-4) On Dad PC, run `python controller/DadBoardApp.py`.
+Install path
+- %LOCALAPPDATA%\Programs\DadBoard\
 
-See `client/README-client.md` and `controller/README-controller.md` for details.
+Updater status store
+- %LOCALAPPDATA%\DadBoard\Updater\last_result.json
 
-## Update flow (current architecture)
-- `DadBoard.exe` is the runtime app only; it does not download or replace files.
-- `DadBoardUpdater.exe` checks for updates, downloads payloads, and invokes Setup.
-- `DadBoardSetup.exe` applies installs/repairs using a local payload zip.
-- Use the tray menu “Check for updates now” to launch the Updater.
+Stable status schema (current)
+- schema_version (int)
+- timestamp_utc (ISO 8601)
+- invocation (interactive|silent|scheduled|manual|triggered)
+- channel (nightly|stable)
+- installed_version
+- latest_version
+- action (none|checked|downloaded|invoked_setup|updated|repair|failed)
+- success (bool)
+- exit_code (int)
+- error_code (string)
+- error_message (string)
+- log_path
+- payload_path (optional)
+- setup_exit_code (optional)
+- duration_ms (optional)
+- manifest_url
 
-## Updater scheduling and status
-Status file:
-- `%LOCALAPPDATA%\\DadBoard\\Updater\\last_result.json`
-
-Exit codes:
+Updater exit codes
 - 0 = success (up-to-date or update applied)
 - 2 = invalid arguments
 - 3 = network failure (manifest fetch)
@@ -32,11 +39,19 @@ Exit codes:
 - 5 = setup invocation failure
 - 6 = setup failed (non-zero)
 - 7 = status store write failure
+- 8 = unknown failure
 
-Schedule examples:
-- `DadBoardUpdater.exe schedule install --channel nightly --time 03:00 --jitter-min 30`
-- `DadBoardUpdater.exe schedule status`
-- `DadBoardUpdater.exe schedule remove`
+Updater CLI examples
+- Check now (interactive UI):
+  - DadBoardUpdater.exe check --interactive
+- Check silently:
+  - DadBoardUpdater.exe check --silent --channel nightly
+- Triggered run (no networking changes here, just a CLI entrypoint):
+  - DadBoardUpdater.exe trigger --reason "leader-run" --channel nightly
+- Schedule daily checks with jitter:
+  - DadBoardUpdater.exe schedule install --channel nightly --time 03:00 --jitter-min 30
+  - DadBoardUpdater.exe schedule status
+  - DadBoardUpdater.exe schedule remove
 
-## Release baseline note
+Release baseline note
 Releases prior to v0.1.0.1 may include binaries stamped as 1.0.0+<sha>, which breaks semver update ordering. Use v0.1.0.1 as the first correct-by-default baseline for update testing.
