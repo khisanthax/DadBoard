@@ -7,6 +7,9 @@ public sealed class UpdateState
     public string LastCheckedUtc { get; set; } = "";
     public string LastResult { get; set; } = "";
     public string LastError { get; set; } = "";
+    public string LastErrorCode { get; set; } = "";
+    public string LastVersionBefore { get; set; } = "";
+    public string LastVersionAfter { get; set; } = "";
     public string LatestVersion { get; set; } = "";
     public int ConsecutiveFailures { get; set; }
     public bool UpdatesDisabled { get; set; }

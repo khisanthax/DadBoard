@@ -30,6 +30,9 @@ public sealed class AgentInfo
     public string UpdateDisabledUntilUtc { get; set; } = "";
     public string UpdateLastResetUtc { get; set; } = "";
     public string UpdateLastResetBy { get; set; } = "";
+    public string UpdateVersionBefore { get; set; } = "";
+    public string UpdateVersionAfter { get; set; } = "";
+    public string UpdateErrorCode { get; set; } = "";
     public string UpdateExpectedVersion { get; set; } = "";
     public string UpdatePreviousVersion { get; set; } = "";
     public DateTime UpdateRequestedUtc { get; set; }

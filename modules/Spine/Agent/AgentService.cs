@@ -553,6 +553,10 @@ public sealed class AgentService : IDisposable
         if (_updateState.UpdatesDisabled && force)
         {
             var message = "Updates disabled due to repeated failures.";
+            EnsureUpdateVersionsForFailure();
+            _updateState.LastErrorCode = "updates_disabled";
+            _updateState.LastError = message;
+            UpdateStateStore.Save(_updateState);
             SendUpdateStatus("failed", message);
             _logger.Warn(message);
             return;
@@ -571,6 +575,10 @@ public sealed class AgentService : IDisposable
         if (string.IsNullOrWhiteSpace(primaryUrl) && string.IsNullOrWhiteSpace(fallbackUrl))
         {
             var message = "Update source not configured.";
+            EnsureUpdateVersionsForFailure();
+            _updateState.LastErrorCode = "update_source_missing";
+            _updateState.LastError = message;
+            UpdateStateStore.Save(_updateState);
             SendUpdateStatus("failed", message);
             _logger.Warn(message);
             return;
@@ -583,6 +591,9 @@ public sealed class AgentService : IDisposable
             if (manifest == null)
             {
                 var message = error ?? "Manifest unavailable.";
+                EnsureUpdateVersionsForFailure();
+                _updateState.LastErrorCode = "manifest_unavailable";
+                _updateState.LastError = message;
                 RegisterUpdateFailure(message);
                 SendUpdateStatus("failed", message);
                 return;
@@ -590,6 +601,9 @@ public sealed class AgentService : IDisposable
 
             var latest = VersionUtil.Normalize(manifest.LatestVersion);
             var current = VersionUtil.GetCurrentVersion();
+            _updateState.LastVersionBefore = current;
+            _updateState.LastVersionAfter = "";
+            _updateState.LastErrorCode = "";
             var tokenChanged = manifest.ForceCheckToken != _updateState.ForceCheckToken;
             var versionNewer = VersionUtil.Compare(latest, current) > 0;
 
@@ -648,7 +662,10 @@ public sealed class AgentService : IDisposable
                 return;
             }
 
-            _updateState.LastResult = "restarting";
+            if (string.IsNullOrWhiteSpace(_updateState.LastResult))
+            {
+                _updateState.LastResult = "updated";
+            }
             UpdateStateStore.Save(_updateState);
         }
         catch (Exception ex)
@@ -781,6 +798,10 @@ public sealed class AgentService : IDisposable
             var downloaded = await EnsureUpdaterPresentAsync(manifestUrl, fallbackManifestUrl).ConfigureAwait(false);
             if (!downloaded || !File.Exists(updaterExe))
             {
+                EnsureUpdateVersionsForFailure();
+                _updateState.LastErrorCode = "updater_missing";
+                _updateState.LastError = $"Updater not found: {updaterExe}";
+                UpdateStateStore.Save(_updateState);
                 SendUpdateStatus("failed", $"Updater not found: {updaterExe}");
                 _logger.Warn($"Update skipped: {updaterExe} missing after download attempt.");
                 return false;
@@ -809,8 +830,10 @@ public sealed class AgentService : IDisposable
         {
             _lastUpdateCanceled = true;
             var message = "Update canceled by user (UAC/consent).";
+            EnsureUpdateVersionsForFailure();
             _updateState.LastResult = "canceled";
             _updateState.LastError = message;
+            _updateState.LastErrorCode = "updater_canceled";
             UpdateStateStore.Save(_updateState);
             SendUpdateStatus("failed", message);
             _logger.Warn($"Updater launch canceled by user: {ex.Message}");
@@ -818,12 +841,20 @@ public sealed class AgentService : IDisposable
         }
         catch (Exception ex)
         {
+            EnsureUpdateVersionsForFailure();
+            _updateState.LastErrorCode = "updater_launch_failed";
+            _updateState.LastError = ex.Message;
+            UpdateStateStore.Save(_updateState);
             SendUpdateStatus("failed", $"Failed to launch updater: {ex.Message}");
             _logger.Error($"Updater start failed: {ex}");
             return false;
         }
         if (process == null)
         {
+            EnsureUpdateVersionsForFailure();
+            _updateState.LastErrorCode = "updater_launch_failed";
+            _updateState.LastError = "Failed to launch updater.";
+            UpdateStateStore.Save(_updateState);
             SendUpdateStatus("failed", "Failed to launch updater.");
             _logger.Warn("Updater process failed to start.");
             return false;
@@ -834,12 +865,22 @@ public sealed class AgentService : IDisposable
 
         if (process.ExitCode != 0)
         {
-            SendUpdateStatus("failed", $"Updater exited with code {process.ExitCode}.");
+            EnsureUpdateVersionsForFailure();
+            _updateState.LastResult = "failed";
+            _updateState.LastError = $"Updater exited with code {process.ExitCode}.";
+            _updateState.LastErrorCode = $"updater_exit_{process.ExitCode}";
+            UpdateStateStore.Save(_updateState);
+            SendUpdateStatus("failed", _updateState.LastError);
             _logger.Warn($"Updater exited with {process.ExitCode}.");
             return false;
         }
 
-        SendUpdateStatus("restarting", "Restarting DadBoard.");
+        _updateState.LastResult = "updated";
+        _updateState.LastError = "";
+        _updateState.LastErrorCode = "";
+        _updateState.LastVersionAfter = VersionUtil.Normalize(VersionUtil.GetVersionFromFile(DadBoardPaths.InstalledExePath));
+        UpdateStateStore.Save(_updateState);
+        SendUpdateStatus("updated", $"Update applied ({_updateState.LastVersionAfter}). Restarting.");
         _logger.Info("Updater finished; requesting shutdown.");
         ShutdownRequested?.Invoke();
         return true;
@@ -1026,6 +1067,10 @@ public sealed class AgentService : IDisposable
     {
         _updateState.LastResult = "failed";
         _updateState.LastError = error;
+        if (string.IsNullOrWhiteSpace(_updateState.LastErrorCode))
+        {
+            _updateState.LastErrorCode = "update_failure";
+        }
         _updateState.ConsecutiveFailures++;
         if (_updateState.ConsecutiveFailures >= 3)
         {
@@ -1034,6 +1079,19 @@ public sealed class AgentService : IDisposable
         }
 
         UpdateStateStore.Save(_updateState);
+    }
+
+    private void EnsureUpdateVersionsForFailure()
+    {
+        if (string.IsNullOrWhiteSpace(_updateState.LastVersionBefore))
+        {
+            _updateState.LastVersionBefore = VersionUtil.GetCurrentVersion();
+        }
+
+        if (string.IsNullOrWhiteSpace(_updateState.LastVersionAfter))
+        {
+            _updateState.LastVersionAfter = _updateState.LastVersionBefore;
+        }
     }
 
     public void ResetUpdateFailuresLocal(string initiator)
@@ -1060,6 +1118,9 @@ public sealed class AgentService : IDisposable
         {
             Status = status,
             Message = message,
+            ErrorCode = _updateState.LastErrorCode,
+            VersionBefore = _updateState.LastVersionBefore,
+            VersionAfter = _updateState.LastVersionAfter,
             UpdatesDisabled = _updateState.UpdatesDisabled,
             ConsecutiveFailures = _updateState.ConsecutiveFailures,
             LastError = _updateState.LastError,
@@ -1086,6 +1147,9 @@ public sealed class AgentService : IDisposable
         {
             Status = _state.UpdateStatus,
             Message = _state.UpdateMessage,
+            ErrorCode = _updateState.LastErrorCode,
+            VersionBefore = _updateState.LastVersionBefore,
+            VersionAfter = _updateState.LastVersionAfter,
             UpdatesDisabled = _updateState.UpdatesDisabled,
             ConsecutiveFailures = _updateState.ConsecutiveFailures,
             LastError = _updateState.LastError,
@@ -1104,6 +1168,9 @@ public sealed class AgentService : IDisposable
         _updateState.UpdatesDisabled = false;
         _updateState.LastResult = "";
         _updateState.LastError = "";
+        _updateState.LastErrorCode = "";
+        _updateState.LastVersionBefore = "";
+        _updateState.LastVersionAfter = "";
         _updateState.DisabledUntilUtc = "";
         _updateState.LastResetUtc = DateTime.UtcNow.ToString("O");
         _updateState.LastResetBy = initiator;

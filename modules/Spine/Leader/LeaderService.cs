@@ -295,7 +295,10 @@ public sealed class LeaderService : IDisposable
             UpdateLastResult = a.UpdateLastResult,
             UpdateDisabledUntilUtc = a.UpdateDisabledUntilUtc,
             UpdateLastResetUtc = a.UpdateLastResetUtc,
-            UpdateLastResetBy = a.UpdateLastResetBy
+            UpdateLastResetBy = a.UpdateLastResetBy,
+            UpdateVersionBefore = a.UpdateVersionBefore,
+            UpdateVersionAfter = a.UpdateVersionAfter,
+            UpdateErrorCode = a.UpdateErrorCode
         }).OrderBy(a => a.Name, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
@@ -1619,6 +1622,9 @@ public sealed class LeaderService : IDisposable
         agent.UpdateGraceUntilUtc = DateTime.UtcNow.Add(_updateGracePeriod);
         agent.UpdatePreviousVersion = agent.Version ?? "";
         agent.UpdateExpectedVersion = ResolveExpectedVersion(manifestUrl);
+        agent.UpdateVersionBefore = agent.UpdatePreviousVersion;
+        agent.UpdateVersionAfter = "";
+        agent.UpdateErrorCode = "";
         agent.UpdateStatus = "requested";
         agent.UpdateMessage = $"Update requested via {manifestUrl}";
         agent.UpdateInProgress = true;
@@ -1640,10 +1646,18 @@ public sealed class LeaderService : IDisposable
 
     private void MarkUpdateSuccess(AgentInfo agent, string? message = null)
     {
+        if (string.IsNullOrWhiteSpace(agent.UpdateVersionBefore))
+        {
+            agent.UpdateVersionBefore = agent.UpdatePreviousVersion;
+        }
+        if (string.IsNullOrWhiteSpace(agent.UpdateVersionAfter))
+        {
+            agent.UpdateVersionAfter = agent.Version ?? "";
+        }
         agent.UpdateStatus = "updated";
         agent.UpdateMessage = message ?? $"Updated to {agent.Version}";
         agent.UpdateInProgress = false;
-        agent.LastResult = "Updated";
+        agent.LastResult = BuildUpdateResult(agent.UpdateVersionBefore, agent.UpdateVersionAfter, true, agent.UpdateErrorCode);
         agent.LastError = "None";
         agent.UpdateDisabled = false;
         agent.UpdateConsecutiveFailures = 0;
@@ -1655,14 +1669,45 @@ public sealed class LeaderService : IDisposable
 
     private void MarkUpdateFailed(AgentInfo agent, string message)
     {
+        if (string.IsNullOrWhiteSpace(agent.UpdateVersionBefore))
+        {
+            agent.UpdateVersionBefore = agent.UpdatePreviousVersion;
+        }
+        if (string.IsNullOrWhiteSpace(agent.UpdateVersionAfter))
+        {
+            agent.UpdateVersionAfter = agent.Version ?? "";
+        }
+        if (string.IsNullOrWhiteSpace(agent.UpdateErrorCode))
+        {
+            agent.UpdateErrorCode = "failed";
+        }
         agent.UpdateStatus = "failed";
         agent.UpdateMessage = message;
         agent.UpdateInProgress = false;
-        agent.LastResult = "Failed";
+        agent.LastResult = BuildUpdateResult(agent.UpdateVersionBefore, agent.UpdateVersionAfter, false, agent.UpdateErrorCode);
         agent.LastError = string.IsNullOrWhiteSpace(message) ? "Update failed." : message;
         agent.UpdateLastError = agent.LastError;
         agent.UpdateLastResult = agent.LastResult;
         _logger.Warn($"Update failed pcId={agent.PcId} error={agent.LastError}");
+    }
+
+    private static string BuildUpdateResult(string before, string after, bool success, string errorCode)
+    {
+        var normalizedBefore = NormalizeIfPresent(before);
+        var normalizedAfter = NormalizeIfPresent(after);
+        var hasBefore = !string.IsNullOrWhiteSpace(normalizedBefore);
+        var hasAfter = !string.IsNullOrWhiteSpace(normalizedAfter);
+        var arrow = hasBefore && hasAfter ? $" {normalizedBefore} -> {normalizedAfter}" :
+            hasAfter ? $" {normalizedAfter}" :
+            hasBefore ? $" {normalizedBefore}" : "";
+        var baseText = success ? "Updated" : "Failed";
+        var suffix = string.IsNullOrWhiteSpace(errorCode) ? "" : $" ({errorCode})";
+        return $"{baseText}{arrow}{suffix}".Trim();
+    }
+
+    private static string NormalizeIfPresent(string value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? "" : VersionUtil.Normalize(value);
     }
 
     private void ClearUpdateFailureCache(AgentInfo agent, string initiator, bool resetStatus)
@@ -1679,6 +1724,9 @@ public sealed class LeaderService : IDisposable
         agent.UpdateDisabledUntilUtc = "";
         agent.UpdateLastResetUtc = DateTime.UtcNow.ToString("O");
         agent.UpdateLastResetBy = initiator;
+        agent.UpdateErrorCode = "";
+        agent.UpdateVersionBefore = "";
+        agent.UpdateVersionAfter = "";
         if (resetStatus)
         {
             agent.LastResult = "";
@@ -1735,6 +1783,21 @@ public sealed class LeaderService : IDisposable
             agent.UpdateLastResetBy = status.LastResetBy;
         }
 
+        if (!string.IsNullOrWhiteSpace(status.VersionBefore))
+        {
+            agent.UpdateVersionBefore = status.VersionBefore;
+        }
+
+        if (!string.IsNullOrWhiteSpace(status.VersionAfter))
+        {
+            agent.UpdateVersionAfter = status.VersionAfter;
+        }
+
+        if (!string.IsNullOrWhiteSpace(status.ErrorCode))
+        {
+            agent.UpdateErrorCode = status.ErrorCode;
+        }
+
         if (normalized is "starting" or "starting_update" or "downloading" or "installing" or "applying")
         {
             agent.UpdateInProgress = true;
@@ -1782,6 +1845,7 @@ public sealed class LeaderService : IDisposable
 
         if (DateTime.UtcNow > agent.UpdateGraceUntilUtc)
         {
+            agent.UpdateErrorCode = "timeout";
             MarkUpdateFailed(agent, "Update did not complete before timeout.");
             return;
         }

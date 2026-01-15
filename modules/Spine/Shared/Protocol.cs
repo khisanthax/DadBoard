@@ -118,6 +118,9 @@ public sealed class UpdateStatusPayload
 {
     public string Status { get; set; } = "";
     public string? Message { get; set; }
+    public string? ErrorCode { get; set; }
+    public string? VersionBefore { get; set; }
+    public string? VersionAfter { get; set; }
     public bool? UpdatesDisabled { get; set; }
     public int? ConsecutiveFailures { get; set; }
     public string? LastError { get; set; }
