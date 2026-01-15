@@ -888,6 +888,40 @@ public sealed class AgentService : IDisposable
             return false;
         }
 
+        var updaterStatus = UpdaterStatusStore.Load();
+        if (updaterStatus != null && !updaterStatus.Success)
+        {
+            EnsureUpdateVersionsForFailure();
+            _updateState.LastResult = "failed";
+            _updateState.LastError = updaterStatus.ErrorMessage;
+            _updateState.LastErrorCode = string.IsNullOrWhiteSpace(updaterStatus.ErrorCode) ? "update_failed" : updaterStatus.ErrorCode;
+            UpdateStateStore.Save(_updateState);
+            SendUpdateStatus("failed", string.IsNullOrWhiteSpace(_updateState.LastError) ? "Update failed." : _updateState.LastError);
+            _logger.Warn($"Updater status failure: {_updateState.LastErrorCode} {_updateState.LastError}");
+            return false;
+        }
+
+        var applied = false;
+        if (updaterStatus != null)
+        {
+            var action = (updaterStatus.Action ?? "").Trim().ToLowerInvariant();
+            var result = (updaterStatus.Result ?? "").Trim().ToLowerInvariant();
+            applied = action is "updated" or "repair" || result == "updated";
+        }
+
+        if (!applied)
+        {
+            var message = "Up to date.";
+            _updateState.LastResult = "up-to-date";
+            _updateState.LastError = "";
+            _updateState.LastErrorCode = "";
+            _updateState.LastVersionAfter = _updateState.LastVersionBefore;
+            UpdateStateStore.Save(_updateState);
+            SendUpdateStatus("idle", message);
+            _logger.Info("Updater finished; no restart required.");
+            return true;
+        }
+
         _updateState.LastResult = "updated";
         _updateState.LastError = "";
         _updateState.LastErrorCode = "";

@@ -49,6 +49,10 @@ Phase 4.1 -- Post-Update Quiet Restart (DONE)
 - Setup restarts DadBoard in tray-only/minimized mode (quiet restart).
 - Published and pushed: commit 52282d6.
 
+Phase 4.2 -- Agent Update Exit Guard (DONE)
+- Agent no longer exits after updater runs if no update was applied (up-to-date check).
+- Shutdown only when updater reports updated/repair.
+
 Phase 5 -- Leader-Triggered Updater Runs (DONE)
 - Leader commands selected agents to run DadBoardUpdater.exe.
 - Agent sends ACK on start + final success/failure result with error class.
