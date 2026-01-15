@@ -443,7 +443,7 @@ public sealed class AgentService : IDisposable
             }
             else
             {
-                SendStatus(correlationId, "failed", command.GameId, "No launch target provided.");
+                SendStatus(correlationId, "failed", command.GameId, "No launch target provided.", "config_invalid");
                 return;
             }
 
@@ -455,13 +455,19 @@ public sealed class AgentService : IDisposable
             }
             else
             {
-                SendStatus(correlationId, "failed", command.GameId, "TIMEOUT waiting for game process.");
+                SendStatus(correlationId, "failed", command.GameId, "TIMEOUT waiting for game process.", "timeout");
                 _logger.Warn($"LaunchGame timeout corr={correlationId} gameId={command.GameId}.");
             }
         }
+        catch (Win32Exception ex)
+        {
+            var errorClass = MapLaunchErrorClass(ex);
+            SendStatus(correlationId, "failed", command.GameId, ex.Message, errorClass);
+            _logger.Error($"LaunchGame failed corr={correlationId}: {ex.Message}");
+        }
         catch (Exception ex)
         {
-            SendStatus(correlationId, "failed", command.GameId, ex.Message);
+            SendStatus(correlationId, "failed", command.GameId, ex.Message, "launch_failed");
             _logger.Error($"LaunchGame failed corr={correlationId}: {ex.Message}");
         }
     }
@@ -517,7 +523,7 @@ public sealed class AgentService : IDisposable
         {
             if (string.IsNullOrWhiteSpace(command.ExePath))
             {
-                SendStatus(correlationId, "failed", null, "No exePath provided.");
+                SendStatus(correlationId, "failed", null, "No exePath provided.", "config_invalid");
                 _logger.Warn($"LaunchExe failed corr={correlationId}: no exePath provided.");
                 return;
             }
@@ -534,10 +540,17 @@ public sealed class AgentService : IDisposable
             SendStatus(correlationId, "running", null, "Process started.");
             _logger.Info($"LaunchExe running corr={correlationId}.");
         }
+        catch (Win32Exception ex)
+        {
+            var errorClass = MapLaunchErrorClass(ex);
+            var message = $"LaunchExe failed: {ex.Message}";
+            SendStatus(correlationId, "failed", null, message, errorClass);
+            _logger.Error($"LaunchExe failed corr={correlationId}: {ex.Message}");
+        }
         catch (Exception ex)
         {
             var message = $"LaunchExe failed: {ex.Message}";
-            SendStatus(correlationId, "failed", null, message);
+            SendStatus(correlationId, "failed", null, message, "launch_failed");
             _logger.Error($"LaunchExe failed corr={correlationId}: {ex.Message}");
         }
     }
@@ -1253,16 +1266,28 @@ public sealed class AgentService : IDisposable
         SendEnvelope(socket, ProtocolConstants.TypeAck, correlationId, ack);
     }
 
-    private void SendStatus(string correlationId, string state, string? gameId, string? message)
+    private void SendStatus(string correlationId, string state, string? gameId, string? message, string? errorClass = null)
     {
         var status = new StatusPayload
         {
             State = state,
             GameId = gameId,
-            Message = message
+            Message = message,
+            ErrorClass = errorClass
         };
         _state.LastCommandState = state;
         BroadcastEnvelope(ProtocolConstants.TypeStatus, correlationId, status);
+    }
+
+    private static string MapLaunchErrorClass(Win32Exception ex)
+    {
+        return ex.NativeErrorCode switch
+        {
+            2 => "file_not_found",
+            3 => "file_not_found",
+            5 => "permission_denied",
+            _ => "launch_failed"
+        };
     }
 
     private void SendEnvelope(WebSocket socket, string type, string correlationId, object payload)

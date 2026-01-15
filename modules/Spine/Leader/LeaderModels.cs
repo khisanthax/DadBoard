@@ -21,6 +21,7 @@ public sealed class AgentInfo
     public DateTime LastAckTs { get; set; }
     public string LastResult { get; set; } = "";
     public string LastError { get; set; } = "";
+    public string LastErrorClass { get; set; } = "";
     public string UpdateStatus { get; set; } = "";
     public string UpdateMessage { get; set; } = "";
     public bool UpdateDisabled { get; set; }

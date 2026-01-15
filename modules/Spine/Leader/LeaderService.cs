@@ -287,6 +287,7 @@ public sealed class LeaderService : IDisposable
             LastAckTs = a.LastAckTs,
             LastResult = a.LastResult,
             LastError = a.LastError,
+            LastErrorClass = a.LastErrorClass,
             UpdateStatus = a.UpdateStatus,
             UpdateMessage = a.UpdateMessage,
             UpdateDisabled = a.UpdateDisabled,
@@ -1132,8 +1133,9 @@ public sealed class LeaderService : IDisposable
         {
             agent.LastStatus = "ws_error";
             agent.LastStatusMessage = connection?.LastError ?? "Unable to connect";
-            agent.LastResult = "Failed";
+            agent.LastResult = "Failed (rpc_error)";
             agent.LastError = agent.LastStatusMessage;
+            agent.LastErrorClass = "rpc_error";
             return;
         }
 
@@ -1189,8 +1191,9 @@ public sealed class LeaderService : IDisposable
         {
             agent.LastStatus = "ws_error";
             agent.LastStatusMessage = connection?.LastError ?? "Unable to connect";
-            agent.LastResult = "Failed";
+            agent.LastResult = "Failed (rpc_error)";
             agent.LastError = agent.LastStatusMessage;
+            agent.LastErrorClass = "rpc_error";
             _logger.Warn($"LaunchGame failed for {agent.Name}: {agent.LastStatusMessage}");
             return (false, agent.LastStatusMessage);
         }
@@ -2107,8 +2110,9 @@ public sealed class LeaderService : IDisposable
             {
                 agent.LastStatus = "failed";
                 agent.LastStatusMessage = ack?.ErrorMessage ?? "Ack failed";
-                agent.LastResult = "Failed";
+                agent.LastResult = "Failed (rpc_error)";
                 agent.LastError = agent.LastStatusMessage;
+                agent.LastErrorClass = "rpc_error";
             }
             return;
         }
@@ -2120,7 +2124,7 @@ public sealed class LeaderService : IDisposable
             {
                 agent.LastStatus = status.State;
                 agent.LastStatusMessage = status.Message ?? "";
-                ApplyResult(agent, status.State, status.Message);
+                ApplyResult(agent, status.State, status.Message, status.ErrorClass);
             }
             return;
         }
@@ -2135,26 +2139,31 @@ public sealed class LeaderService : IDisposable
         }
     }
 
-    private static void ApplyResult(AgentInfo agent, string state, string? message)
+    private static void ApplyResult(AgentInfo agent, string state, string? message, string? errorClass)
     {
         if (string.Equals(state, "running", StringComparison.OrdinalIgnoreCase))
         {
             agent.LastResult = "Success";
             agent.LastError = "";
+            agent.LastErrorClass = "";
             return;
         }
 
         if (string.Equals(state, "failed", StringComparison.OrdinalIgnoreCase))
         {
-            agent.LastResult = "Failed";
+            var suffix = string.IsNullOrWhiteSpace(errorClass) ? "" : $" ({errorClass})";
+            agent.LastResult = $"Failed{suffix}";
             agent.LastError = message ?? "";
+            agent.LastErrorClass = errorClass ?? "";
             return;
         }
 
         if (string.Equals(state, "timeout", StringComparison.OrdinalIgnoreCase))
         {
-            agent.LastResult = "Timed out";
+            var suffix = string.IsNullOrWhiteSpace(errorClass) ? "" : $" ({errorClass})";
+            agent.LastResult = $"Timed out{suffix}";
             agent.LastError = message ?? "Command timeout.";
+            agent.LastErrorClass = string.IsNullOrWhiteSpace(errorClass) ? "timeout" : errorClass;
         }
     }
 

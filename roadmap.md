@@ -49,7 +49,7 @@ Phase 4.1 -- Post-Update Quiet Restart (DONE)
 - Setup restarts DadBoard in tray-only/minimized mode (quiet restart).
 - Published and pushed: commit 52282d6.
 
-Phase 5 -- Leader-Triggered Updater Runs (IN PROGRESS)
+Phase 5 -- Leader-Triggered Updater Runs (DONE)
 - Leader commands selected agents to run DadBoardUpdater.exe.
 - Agent sends ACK on start + final success/failure result with error class.
 - Leader aggregates per-agent results (start/end only, no progress).
@@ -57,16 +57,21 @@ Phase 5 -- Leader-Triggered Updater Runs (IN PROGRESS)
 - Persistence: last run only (agent status store + leader cached view).
 - Co-leader support (future).
 
+Phase 6 -- Game Launch MVP (ACTIVE)
+- Manual agent selection + explicit Launch button in Games tab.
+- Launch uses existing leader -> agent RPC with ACK + final status.
+- Agents start via steam://run/<appId> or explicit exe path.
+- Per-agent results shown inline (Succeeded / Failed with error class + message).
+- Process wait/timeout still enabled for confirmation (running or timeout).
+
 What needs to be done next
 
-Phase 5 is now active. Complete leader-triggered updater runs before resuming game launch MVP.
+Phase 6 (Game Launch MVP) is active.
 
-After Phase 5:
-- Option A -- Resume Game Launch MVP (paused feature work)
-  - Finish launch flow end-to-end (leader -> agent targeting -> launch confirmation/error reporting)
-  - Use the now-stable update system as the foundation.
+After Phase 6:
+- Option A -- Game launch polish (nice-to-have)
+  - Make error classes more discoverable in the UI
+  - Add a compact per-agent launch summary
 - Option B -- Leader-triggered rollouts enhancements (nice-to-have)
   - Co-leader support (future)
   - Aggregated rollout reporting polish
-
-Recommendation: Option A next (unpause Game Launch MVP) once Phase 5 is done.

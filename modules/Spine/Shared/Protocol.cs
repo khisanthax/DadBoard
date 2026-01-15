@@ -112,6 +112,7 @@ public sealed class StatusPayload
     public string State { get; set; } = "";
     public string? Message { get; set; }
     public string? GameId { get; set; }
+    public string? ErrorClass { get; set; }
 }
 
 public sealed class UpdateStatusPayload
