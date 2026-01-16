@@ -93,6 +93,8 @@ Phase 6 -- Game Launch MVP (ACTIVE)
 - Agents start via steam://run/<appId> or explicit exe path.
 - Per-agent results shown inline (Succeeded / Failed with error class + message).
 - Process wait/timeout still enabled for confirmation (running or timeout).
+- Agent persists last launch state + error_class in agent_state.json.
+- Diagnostics shows last launch state/message from agent_state.json.
 
 What needs to be done next
 

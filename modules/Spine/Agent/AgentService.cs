@@ -455,13 +455,15 @@ public sealed class AgentService : IDisposable
             }
             else
             {
-                SendStatus(correlationId, "failed", command.GameId, "TIMEOUT waiting for game process.", "timeout");
+                SendStatus(correlationId, "timeout", command.GameId, "Process not detected before timeout.", "process_not_detected");
                 _logger.Warn($"LaunchGame timeout corr={correlationId} gameId={command.GameId}.");
             }
         }
         catch (Win32Exception ex)
         {
-            var errorClass = MapLaunchErrorClass(ex);
+            var errorClass = !string.IsNullOrWhiteSpace(command.LaunchUrl) && string.IsNullOrWhiteSpace(command.ExePath)
+                ? "steam_uri_failed"
+                : MapLaunchErrorClass(ex);
             SendStatus(correlationId, "failed", command.GameId, ex.Message, errorClass);
             _logger.Error($"LaunchGame failed corr={correlationId}: {ex.Message}");
         }
@@ -1310,6 +1312,15 @@ public sealed class AgentService : IDisposable
             ErrorClass = errorClass
         };
         _state.LastCommandState = state;
+        if (!string.IsNullOrWhiteSpace(gameId))
+        {
+            _state.LastLaunchGameId = gameId;
+            _state.LastLaunchCorrelationId = correlationId;
+            _state.LastLaunchState = state;
+            _state.LastLaunchMessage = message ?? "";
+            _state.LastLaunchErrorClass = errorClass ?? "";
+            _state.LastLaunchTs = DateTime.UtcNow.ToString("O");
+        }
         BroadcastEnvelope(ProtocolConstants.TypeStatus, correlationId, status);
     }
 

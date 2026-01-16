@@ -1419,7 +1419,8 @@ public sealed class LeaderService : IDisposable
                     agent.LastStatus = "timeout";
                     var noAck = agent.LastAckTs == default || agent.LastAckTs < agent.LastCommandTs;
                     agent.LastStatusMessage = noAck ? "No response from agent." : "Command timeout.";
-                    agent.LastResult = "Timed out";
+                    agent.LastErrorClass = noAck ? "no_ack" : "timeout";
+                    agent.LastResult = noAck ? "Timed out (no_ack)" : "Timed out (timeout)";
                     agent.LastError = agent.LastStatusMessage;
                     _logger.Warn($"Command timeout pcId={pcId} corr={correlationId} noAck={noAck}");
                 }

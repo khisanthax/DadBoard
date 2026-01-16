@@ -13,6 +13,12 @@ public sealed class AgentState
     public string LastCommandType { get; set; } = "";
     public string LastCommandTs { get; set; } = "";
     public string LastCommandState { get; set; } = "";
+    public string LastLaunchGameId { get; set; } = "";
+    public string LastLaunchCorrelationId { get; set; } = "";
+    public string LastLaunchState { get; set; } = "";
+    public string LastLaunchMessage { get; set; } = "";
+    public string LastLaunchErrorClass { get; set; } = "";
+    public string LastLaunchTs { get; set; } = "";
     public string UpdateStatus { get; set; } = "idle";
     public string UpdateMessage { get; set; } = "";
 }

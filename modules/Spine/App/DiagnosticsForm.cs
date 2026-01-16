@@ -4,6 +4,7 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using DadBoard.Leader;
@@ -29,6 +30,8 @@ public sealed class DiagnosticsForm : Form
     private readonly TextBox _updaterExitCode = new();
     private readonly TextBox _updaterLogPath = new();
     private readonly TextBox _logsPath = new();
+    private readonly TextBox _lastLaunchState = new();
+    private readonly TextBox _lastLaunchMessage = new();
     private readonly ListView _agentVersions = new();
     private readonly Label _devWarning = new();
     private readonly Button _launchInstalledButton = new();
@@ -44,11 +47,11 @@ public sealed class DiagnosticsForm : Form
 
         _layout.Dock = DockStyle.Fill;
         _layout.ColumnCount = 2;
-        _layout.RowCount = 18;
+        _layout.RowCount = 20;
         _layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
         _layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
-        for (var i = 0; i < 16; i++)
+        for (var i = 0; i < 18; i++)
         {
             _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         }
@@ -81,6 +84,8 @@ public sealed class DiagnosticsForm : Form
         AddRow("Updater exit code", _updaterExitCode, 13);
         AddRow("Updater log", _updaterLogPath, 14);
         AddRow("Logs folder", _logsPath, 15);
+        AddRow("Last launch state", _lastLaunchState, 16);
+        AddRow("Last launch message", _lastLaunchMessage, 17);
 
         var agentLabel = new Label
         {
@@ -88,7 +93,7 @@ public sealed class DiagnosticsForm : Form
             TextAlign = ContentAlignment.MiddleLeft,
             Dock = DockStyle.Fill
         };
-        _layout.Controls.Add(agentLabel, 0, 16);
+        _layout.Controls.Add(agentLabel, 0, 18);
 
         _agentVersions.View = View.Details;
         _agentVersions.FullRowSelect = true;
@@ -96,7 +101,7 @@ public sealed class DiagnosticsForm : Form
         _agentVersions.Columns.Add("PC", 200);
         _agentVersions.Columns.Add("Version", 120);
         _agentVersions.Dock = DockStyle.Fill;
-        _layout.Controls.Add(_agentVersions, 1, 16);
+        _layout.Controls.Add(_agentVersions, 1, 18);
 
         var buttonPanel = new FlowLayoutPanel
         {
@@ -123,7 +128,7 @@ public sealed class DiagnosticsForm : Form
         buttonPanel.Controls.Add(_launchInstalledButton);
 
         _layout.Controls.Add(_devWarning, 0, 0);
-        _layout.Controls.Add(buttonPanel, 0, 17);
+        _layout.Controls.Add(buttonPanel, 0, 19);
         _layout.SetColumnSpan(buttonPanel, 2);
 
         Controls.Add(_layout);
@@ -151,10 +156,13 @@ public sealed class DiagnosticsForm : Form
         _updaterLastRun.Text = "Loading...";
         _updaterExitCode.Text = "Loading...";
         _updaterLogPath.Text = "Loading...";
+        _lastLaunchState.Text = "Loading...";
+        _lastLaunchMessage.Text = "Loading...";
 
         UpdateDevWarning(runningPath);
         UpdateAgentVersions();
         LoadUpdaterStatusAsync();
+        LoadAgentLaunchStatusAsync();
     }
 
     private void UpdateDevWarning(string runningPath)
@@ -240,6 +248,44 @@ public sealed class DiagnosticsForm : Form
         }, TaskScheduler.FromCurrentSynchronizationContext());
     }
 
+    private void LoadAgentLaunchStatusAsync()
+    {
+        _ = Task.Run(() =>
+        {
+            var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DadBoard", "Agent", "agent_state.json");
+            if (!File.Exists(path))
+            {
+                return (State: "-", Message: "-", ErrorClass: "");
+            }
+
+            try
+            {
+                var json = File.ReadAllText(path);
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+                var state = root.TryGetProperty("lastLaunchState", out var stateProp) ? stateProp.GetString() ?? "-" : "-";
+                var message = root.TryGetProperty("lastLaunchMessage", out var msgProp) ? msgProp.GetString() ?? "-" : "-";
+                var errorClass = root.TryGetProperty("lastLaunchErrorClass", out var errProp) ? errProp.GetString() ?? "" : "";
+                return (state, message, errorClass);
+            }
+            catch
+            {
+                return (State: "-", Message: "Failed to read agent_state.json", ErrorClass: "");
+            }
+        }).ContinueWith(task =>
+        {
+            if (IsDisposed || Disposing)
+            {
+                return;
+            }
+
+            var result = task.IsFaulted ? (State: "-", Message: "Failed to read agent_state.json", ErrorClass: "") : task.Result;
+            var suffix = string.IsNullOrWhiteSpace(result.ErrorClass) ? "" : $" ({result.ErrorClass})";
+            _lastLaunchState.Text = string.IsNullOrWhiteSpace(result.State) ? "-" : result.State;
+            _lastLaunchMessage.Text = string.IsNullOrWhiteSpace(result.Message) ? "-" : result.Message + suffix;
+        }, TaskScheduler.FromCurrentSynchronizationContext());
+    }
+
     private void OpenLogsFolder()
     {
         var path = _logsPath.Text;
@@ -270,6 +316,8 @@ public sealed class DiagnosticsForm : Form
         sb.AppendLine($"Updater exit code: {_updaterExitCode.Text}");
         sb.AppendLine($"Updater log: {_updaterLogPath.Text}");
         sb.AppendLine($"Logs folder: {_logsPath.Text}");
+        sb.AppendLine($"Last launch state: {_lastLaunchState.Text}");
+        sb.AppendLine($"Last launch message: {_lastLaunchMessage.Text}");
 
         if (_leader != null)
         {
