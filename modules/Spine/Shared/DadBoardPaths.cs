@@ -28,6 +28,9 @@ public static class DadBoardPaths
     public static string UpdateSourceDir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DadBoard", "updates");
 
+    public static string SetupResultPath =>
+        Path.Combine(UpdateSourceDir, "setup_result.json");
+
     public static string SetupLogDir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DadBoard", "logs");
 

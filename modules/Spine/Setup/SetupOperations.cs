@@ -137,6 +137,7 @@ public static class SetupOperations
             throw new IOException("DadBoard.exe did not release file lock after shutdown/kill.");
         }
 
+        var skipUpdater = false;
         var stagingDir = Path.Combine(DadBoardPaths.UpdateSourceDir, "staging_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(stagingDir);
         ZipFile.ExtractToDirectory(packagePath, stagingDir, true);
@@ -156,7 +157,12 @@ public static class SetupOperations
             logger.Info($"Backed up existing exe to {backup}");
         }
 
-        CopyDirectoryWithRetries(stagingDir, DadBoardPaths.InstallDir, logger);
+        skipUpdater = IsFileLocked(DadBoardPaths.UpdaterExePath);
+        if (skipUpdater)
+        {
+            logger.Warn("DadBoardUpdater.exe is locked; proceeding without replacing updater binary.");
+        }
+        CopyDirectoryWithRetries(stagingDir, DadBoardPaths.InstallDir, logger, skipUpdater);
         CopySetupIntoInstallDir(logger);
         CopyUpdaterIntoInstallDir(logger);
         CreateDesktopShortcut(logger);
@@ -171,7 +177,7 @@ public static class SetupOperations
         }
     }
 
-    private static void CopyDirectory(string sourceDir, string destinationDir)
+    private static void CopyDirectory(string sourceDir, string destinationDir, bool skipUpdater, SetupLogger logger)
     {
         foreach (var directory in Directory.GetDirectories(sourceDir, "*", SearchOption.AllDirectories))
         {
@@ -182,12 +188,17 @@ public static class SetupOperations
         foreach (var file in Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories))
         {
             var targetPath = file.Replace(sourceDir, destinationDir, StringComparison.OrdinalIgnoreCase);
+            if (skipUpdater && string.Equals(Path.GetFullPath(targetPath), Path.GetFullPath(DadBoardPaths.UpdaterExePath), StringComparison.OrdinalIgnoreCase))
+            {
+                logger.Warn($"Skipping updater replacement (locked): {targetPath}");
+                continue;
+            }
             Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
             File.Copy(file, targetPath, true);
         }
     }
 
-    private static void CopyDirectoryWithRetries(string sourceDir, string destinationDir, SetupLogger logger)
+    private static void CopyDirectoryWithRetries(string sourceDir, string destinationDir, SetupLogger logger, bool skipUpdater)
     {
         const int attempts = 5;
         for (var i = 1; i <= attempts; i++)
@@ -195,7 +206,7 @@ public static class SetupOperations
             try
             {
                 logger.Info($"Replacing files (attempt {i}/{attempts})...");
-                CopyDirectory(sourceDir, destinationDir);
+                CopyDirectory(sourceDir, destinationDir, skipUpdater, logger);
                 logger.Info("Replace succeeded.");
                 return;
             }
@@ -277,7 +288,7 @@ public static class SetupOperations
 
         if (!StopUpdaterProcesses(logger, timeout))
         {
-            return false;
+            logger.Warn("DadBoardUpdater still running; continuing without updater replacement.");
         }
 
         return true;
@@ -366,12 +377,33 @@ public static class SetupOperations
 
         if (!WaitForFileUnlock(DadBoardPaths.UpdaterExePath, TimeSpan.FromSeconds(5), logger))
         {
+            var remaining = GetUpdaterProcesses();
+            var remainingPids = remaining.Count == 0 ? "none" : string.Join(",", remaining.Select(p => p.Id));
+            logger.Warn($"DadBoardUpdater.exe did not release file lock after shutdown/kill. remaining_pids={remainingPids}");
             logger.Warn("DadBoardUpdater.exe did not release file lock after shutdown/kill.");
             return false;
         }
 
         logger.Info("Updater file lock released.");
         return true;
+    }
+
+    private static bool IsFileLocked(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            return false;
+        }
+        catch
+        {
+            return true;
+        }
     }
 
     private static List<Process> GetDadBoardProcesses()

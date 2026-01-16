@@ -20,6 +20,7 @@ public sealed class UpdaterStatus
     public string LogPath { get; set; } = "";
     public string PayloadPath { get; set; } = "";
     public int? SetupExitCode { get; set; }
+    public string SetupLogPath { get; set; } = "";
     public long? DurationMs { get; set; }
     public string ManifestUrl { get; set; } = "";
 
@@ -101,6 +102,7 @@ public static class UpdaterStatusStore
                 LogPath = GetString(root, "log_path", "LogPath") ?? "",
                 PayloadPath = GetString(root, "payload_path", "PayloadPath") ?? "",
                 SetupExitCode = GetInt(root, "setup_exit_code", "SetupExitCode"),
+                SetupLogPath = GetString(root, "setup_log_path", "SetupLogPath") ?? "",
                 DurationMs = GetLong(root, "duration_ms", "DurationMs"),
                 ManifestUrl = GetString(root, "manifest_url", "ManifestUrl") ?? "",
                 AvailableVersion = GetString(root, "AvailableVersion") ?? "",

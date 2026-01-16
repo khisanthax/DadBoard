@@ -1,6 +1,8 @@
 using System;
 using System.IO;
 using System.Net.Http;
+using System.Linq;
+using System.IO.Compression;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -25,6 +27,7 @@ sealed class UpdaterEngine
         bool forceRepair,
         string action,
         string invocation,
+        bool detachSetup,
         string logPath,
         CancellationToken ct,
         Action<string> log)
@@ -108,6 +111,15 @@ sealed class UpdaterEngine
                 }
             }
 
+            if (!PackageContainsFile(packageFile, "DadBoard.exe"))
+            {
+                return Fail(status, UpdaterExitCode.DownloadFailure, "missing_payload", "Update package missing DadBoard.exe.", log);
+            }
+            if (!PackageContainsFile(packageFile, "DadBoardUpdater.exe"))
+            {
+                return Fail(status, UpdaterExitCode.DownloadFailure, "missing_updater", "Update package missing DadBoardUpdater.exe.", log);
+            }
+
             var stagedSetup = Path.Combine(DadBoardPaths.UpdateSourceDir, "DadBoardSetup.exe");
             log("Ensuring latest DadBoardSetup.exe is available...");
             var ok = await EnsureSetupPresentAsync(manifestUrl, manifest.PackageUrl, stagedSetup, ct, log).ConfigureAwait(false);
@@ -122,11 +134,25 @@ sealed class UpdaterEngine
             }
 
             status.Action = forceRepair ? "repair" : "invoked_setup";
-            var exitCode = await LaunchSetupAsync(setupExe, packageFile, ct, log).ConfigureAwait(false);
-            status.SetupExitCode = exitCode;
-            if (exitCode != 0)
+            status.SetupLogPath = Path.Combine(DadBoardPaths.SetupLogDir, "setup.log");
+
+            var exitCode = await LaunchSetupAsync(setupExe, packageFile, ct, log, waitForExit: !detachSetup).ConfigureAwait(false);
+            status.SetupExitCode = detachSetup ? null : exitCode;
+            if (!detachSetup && exitCode != 0)
             {
                 return Fail(status, UpdaterExitCode.SetupFailed, "setup_failed", $"DadBoardSetup.exe exited with code {exitCode}.", log);
+            }
+
+            if (detachSetup)
+            {
+                status.Success = true;
+                status.ExitCode = (int)UpdaterExitCode.Success;
+                status.Result = "installing";
+                status.Action = "invoked_setup";
+                status.Message = "Setup launched.";
+                status.AvailableVersion = latest;
+                SaveStatus(status, log);
+                return UpdaterResult.InvokedSetup(latest, UpdaterExitCode.Success);
             }
 
             status.Success = true;
@@ -239,7 +265,21 @@ sealed class UpdaterEngine
         return false;
     }
 
-    private static async Task<int> LaunchSetupAsync(string setupExe, string payloadPath, CancellationToken ct, Action<string> log)
+    private static bool PackageContainsFile(string packagePath, string fileName)
+    {
+        try
+        {
+            using var archive = ZipFile.OpenRead(packagePath);
+            return archive.Entries.Any(entry =>
+                entry.Name.Equals(fileName, StringComparison.OrdinalIgnoreCase));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static async Task<int> LaunchSetupAsync(string setupExe, string payloadPath, CancellationToken ct, Action<string> log, bool waitForExit)
     {
         if (string.IsNullOrWhiteSpace(payloadPath))
         {
@@ -260,6 +300,11 @@ sealed class UpdaterEngine
         if (process == null)
         {
             return 2;
+        }
+
+        if (!waitForExit)
+        {
+            return 0;
         }
 
         await process.WaitForExitAsync(ct).ConfigureAwait(false);
@@ -362,6 +407,9 @@ sealed class UpdaterResult
     public static UpdaterResult Updated(string? version, UpdaterExitCode exitCode)
         => new(UpdaterState.Updated, "Update applied.", version, exitCode);
 
+    public static UpdaterResult InvokedSetup(string? version, UpdaterExitCode exitCode)
+        => new(UpdaterState.InvokedSetup, "Setup launched.", version, exitCode);
+
     public static UpdaterResult Failed(string message, UpdaterExitCode exitCode)
         => new(UpdaterState.Failed, message, null, exitCode);
 }
@@ -370,6 +418,7 @@ enum UpdaterState
 {
     UpToDate,
     Updated,
+    InvokedSetup,
     Failed
 }
 

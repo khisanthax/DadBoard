@@ -68,6 +68,7 @@ static class Program
                         action == UpdaterAction.Repair,
                         action == UpdaterAction.Repair ? "repair" : "check",
                         invocation,
+                        detachSetup: true,
                         logger.LogPath,
                         CancellationToken.None,
                         msg => logger.Info(msg)))

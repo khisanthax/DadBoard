@@ -54,6 +54,27 @@ static class Program
                 var result = Task.Run(() =>
                     SetupOperations.RunAsync(action.Value, payloadPath, stopWait, logger, null, default)).GetAwaiter().GetResult();
 
+                if (action.Value == SetupAction.Install || action.Value == SetupAction.Repair)
+                {
+                    var errorCode = MapSetupErrorCode(result.Error ?? "");
+                    var versionAfter = VersionUtil.Normalize(VersionUtil.GetVersionFromFile(DadBoardPaths.InstalledExePath));
+                    var setupStatus = new SetupResultStatus
+                    {
+                        TimestampUtc = DateTimeOffset.UtcNow.ToString("O"),
+                        Success = result.Success,
+                        ExitCode = result.Success ? 0 : 2,
+                        ErrorCode = errorCode,
+                        ErrorMessage = result.Error ?? "",
+                        VersionAfter = versionAfter
+                    };
+                    if (!SetupResultStore.Save(setupStatus))
+                    {
+                        logger.Warn("Failed to write setup_result.json.");
+                    }
+
+                    logger.Info($"Setup exit_reason={(result.Success ? "success" : "failed")} error_code={errorCode} error={result.Error ?? ""}");
+                }
+
                 if (result.Success && action.Value != SetupAction.Uninstall)
                 {
                     LaunchInstalledApp();
@@ -141,6 +162,30 @@ static class Program
         }
 
         return null;
+    }
+
+    private static string MapSetupErrorCode(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return "";
+        }
+
+        var lowered = message.ToLowerInvariant();
+        if (lowered.Contains("payload"))
+        {
+            return "payload_missing";
+        }
+        if (lowered.Contains("file lock") || lowered.Contains("locked"))
+        {
+            return "file_lock";
+        }
+        if (lowered.Contains("permission") || lowered.Contains("access"))
+        {
+            return "access_denied";
+        }
+
+        return "setup_failed";
     }
 
     private static TimeSpan? TryParseWait(string? waitMsValue)

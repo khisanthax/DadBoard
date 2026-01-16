@@ -84,6 +84,7 @@ public sealed class AgentService : IDisposable
                 DisplayName = _config.DisplayName
             };
             _updateState = UpdateStateStore.Load();
+            ApplySetupResultIfPresent("startup");
             _ = Task.Run(InitializeUpdateConfigAsync);
 
             _udp = new UdpClient(AddressFamily.InterNetwork)
@@ -903,6 +904,23 @@ public sealed class AgentService : IDisposable
             return false;
         }
 
+        if (updaterStatus != null)
+        {
+            var invoked = (updaterStatus.Action ?? "").Trim().Equals("invoked_setup", StringComparison.OrdinalIgnoreCase) ||
+                          (updaterStatus.Result ?? "").Trim().Equals("installing", StringComparison.OrdinalIgnoreCase);
+            if (invoked)
+            {
+                _updateState.LastResult = "installing";
+                _updateState.LastError = "";
+                _updateState.LastErrorCode = "";
+                UpdateStateStore.Save(_updateState);
+                SendUpdateStatus("restarting", "Setup launched; waiting for completion.");
+                _logger.Info("Updater launched setup; waiting for setup_result.json.");
+                _ = Task.Run(() => WaitForSetupResultAsync(TimeSpan.FromMinutes(2)));
+                return true;
+            }
+        }
+
         var applied = false;
         if (updaterStatus != null)
         {
@@ -933,6 +951,46 @@ public sealed class AgentService : IDisposable
         _logger.Info("Updater finished; requesting shutdown.");
         ShutdownRequested?.Invoke();
         return true;
+    }
+
+    private void ApplySetupResultIfPresent(string source)
+    {
+        var result = SetupResultStore.Load();
+        if (result == null)
+        {
+            return;
+        }
+
+        _updateState.LastResult = result.Success ? "updated" : "failed";
+        _updateState.LastError = result.ErrorMessage ?? "";
+        _updateState.LastErrorCode = result.ErrorCode ?? "";
+        _updateState.LastVersionAfter = string.IsNullOrWhiteSpace(result.VersionAfter)
+            ? VersionUtil.Normalize(VersionUtil.GetCurrentVersion())
+            : result.VersionAfter;
+        UpdateStateStore.Save(_updateState);
+        SetupResultStore.TryClear();
+        _logger.Info($"Applied setup result from {source}: success={result.Success} version={_updateState.LastVersionAfter} error={_updateState.LastError}");
+    }
+
+    private async Task WaitForSetupResultAsync(TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline && !_cts.IsCancellationRequested)
+        {
+            var result = SetupResultStore.Load();
+            if (result != null)
+            {
+                ApplySetupResultIfPresent("setup_result");
+                var status = result.Success ? "updated" : "failed";
+                var message = result.Success
+                    ? $"Update applied ({_updateState.LastVersionAfter}). Restarting."
+                    : (string.IsNullOrWhiteSpace(result.ErrorMessage) ? "Update failed." : result.ErrorMessage);
+                SendUpdateStatus(status, message);
+                return;
+            }
+
+            await Task.Delay(1000, _cts.Token).ConfigureAwait(false);
+        }
     }
 
     private async Task<bool> EnsureUpdaterPresentAsync(string primaryManifestUrl, string fallbackManifestUrl)

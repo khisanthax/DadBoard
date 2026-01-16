@@ -94,7 +94,7 @@ sealed class UpdaterForm : Form
         {
             var config = UpdateConfigStore.Load();
             var action = _forceRepair ? "repair" : "check";
-            var result = await _engine.RunAsync(config, _forceRepair, action, "interactive", _logger.LogPath, _cts.Token, AppendLog)
+            var result = await _engine.RunAsync(config, _forceRepair, action, "interactive", detachSetup: false, _logger.LogPath, _cts.Token, AppendLog)
                 .ConfigureAwait(true);
 
             switch (result.State)
@@ -106,6 +106,9 @@ sealed class UpdaterForm : Form
                     break;
                 case UpdaterState.Updated:
                     _statusLabel.Text = $"Update applied ({result.Version}).";
+                    break;
+                case UpdaterState.InvokedSetup:
+                    _statusLabel.Text = "Setup launched. Check progress in Setup.";
                     break;
                 default:
                     _statusLabel.Text = $"Update failed: {result.Message}";
