@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace DadBoard.App;
@@ -10,6 +11,25 @@ static class Program
     [STAThread]
     static void Main(string[] args)
     {
+        var appLogger = new AppLogger();
+        appLogger.Info($"DadBoard starting args=[{string.Join(" ", args)}]");
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+        {
+            appLogger.Error($"Unhandled exception: {e.ExceptionObject}");
+        };
+        Application.ThreadException += (_, e) =>
+        {
+            appLogger.Error($"UI thread exception: {e.Exception}");
+        };
+        TaskScheduler.UnobservedTaskException += (_, e) =>
+        {
+            appLogger.Error($"Unobserved task exception: {e.Exception}");
+        };
+        Application.ApplicationExit += (_, _) =>
+        {
+            appLogger.Info("DadBoard exiting.");
+        };
+
         try
         {
             var isInstallFlow = args.Any(arg =>
@@ -81,13 +101,14 @@ static class Program
 
             using (singleInstance)
             {
-                using var context = new TrayAppContext(launchOptions);
+                using var context = new TrayAppContext(launchOptions, appLogger);
                 singleInstance.BeginListen(context.HandleActivateSignal, context.HandleShutdownSignal);
                 Application.Run(context);
             }
         }
         catch (Exception ex)
         {
+            appLogger.Error($"DadBoard fatal error: {ex}");
             var fallbackDir = Path.Combine(Path.GetTempPath(), "DadBoard");
             Directory.CreateDirectory(fallbackDir);
             var logPath = Path.Combine(fallbackDir, "dadboard_boot.log");

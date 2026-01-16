@@ -42,10 +42,12 @@ sealed class TrayAppContext : ApplicationContext
     private AgentConfig _config;
     private bool _disposed;
     private readonly UpdateLogger _updateLogger = new();
+    private readonly AppLogger _appLogger;
 
-    public TrayAppContext(AppLaunchOptions options)
+    public TrayAppContext(AppLaunchOptions options, AppLogger appLogger)
     {
         _options = options;
+        _appLogger = appLogger;
         _uiContext = SynchronizationContext.Current ?? new SynchronizationContext();
         _postInstallId = options.PostInstallId;
         _baseDir = DataPaths.ResolveBaseDir();
@@ -57,8 +59,13 @@ sealed class TrayAppContext : ApplicationContext
         _configStore = new AppConfigStore(_agentConfigPath);
 
         _agent = new AgentService(_baseDir);
-        _agent.ShutdownRequested += () => _uiContext.Post(_ => Exit(), null);
+        _agent.ShutdownRequested += () =>
+        {
+            _appLogger.Info("Shutdown requested by agent.");
+            _uiContext.Post(_ => Exit(), null);
+        };
         _agent.Start();
+        _appLogger.Info("TrayAppContext started.");
 
         _config = _configStore.Load();
 
@@ -137,6 +144,7 @@ sealed class TrayAppContext : ApplicationContext
         }
 
         _leader = new LeaderService(_baseDir);
+        _appLogger.Info("Leader enabled.");
         if (showUI)
         {
             ShowLeaderUI();
@@ -158,6 +166,7 @@ sealed class TrayAppContext : ApplicationContext
 
         _leader.Dispose();
         _leader = null;
+        _appLogger.Info("Leader disabled.");
 
         _statusForm?.UpdateLeader(null);
         UpdateMenuState();
@@ -476,6 +485,7 @@ sealed class TrayAppContext : ApplicationContext
 
     private void Exit()
     {
+        _appLogger.Info("TrayAppContext exit requested.");
         _tray.Visible = false;
         _leaderForm?.AllowClose();
         _leaderForm?.Close();
