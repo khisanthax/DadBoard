@@ -14,6 +14,8 @@ namespace DadBoard.App;
 
 public sealed class DiagnosticsForm : Form
 {
+    private readonly record struct LaunchSnapshot(string State, string Message, string ErrorClass);
+
     private readonly TableLayoutPanel _layout = new();
     private readonly TextBox _runningPath = new();
     private readonly TextBox _expectedPath = new();
@@ -255,7 +257,7 @@ public sealed class DiagnosticsForm : Form
             var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DadBoard", "Agent", "agent_state.json");
             if (!File.Exists(path))
             {
-                return (State: "-", Message: "-", ErrorClass: "");
+                return new LaunchSnapshot("-", "-", "");
             }
 
             try
@@ -266,11 +268,11 @@ public sealed class DiagnosticsForm : Form
                 var state = root.TryGetProperty("lastLaunchState", out var stateProp) ? stateProp.GetString() ?? "-" : "-";
                 var message = root.TryGetProperty("lastLaunchMessage", out var msgProp) ? msgProp.GetString() ?? "-" : "-";
                 var errorClass = root.TryGetProperty("lastLaunchErrorClass", out var errProp) ? errProp.GetString() ?? "" : "";
-                return (state, message, errorClass);
+                return new LaunchSnapshot(state, message, errorClass);
             }
             catch
             {
-                return (State: "-", Message: "Failed to read agent_state.json", ErrorClass: "");
+                return new LaunchSnapshot("-", "Failed to read agent_state.json", "");
             }
         }).ContinueWith(task =>
         {
@@ -279,7 +281,7 @@ public sealed class DiagnosticsForm : Form
                 return;
             }
 
-            var result = task.IsFaulted ? (State: "-", Message: "Failed to read agent_state.json", ErrorClass: "") : task.Result;
+            var result = task.IsFaulted ? new LaunchSnapshot("-", "Failed to read agent_state.json", "") : task.Result;
             var suffix = string.IsNullOrWhiteSpace(result.ErrorClass) ? "" : $" ({result.ErrorClass})";
             _lastLaunchState.Text = string.IsNullOrWhiteSpace(result.State) ? "-" : result.State;
             _lastLaunchMessage.Text = string.IsNullOrWhiteSpace(result.Message) ? "-" : result.Message + suffix;
