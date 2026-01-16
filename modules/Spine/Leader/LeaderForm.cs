@@ -155,7 +155,8 @@ public sealed class LeaderForm : Form
         {
             Dock = DockStyle.Fill,
             FlowDirection = FlowDirection.LeftToRight,
-            AutoSize = true
+            AutoSize = true,
+            WrapContents = false
         };
 
         _launchOnSelectedAgentButton.Text = "Launch selected game";
@@ -244,18 +245,25 @@ public sealed class LeaderForm : Form
             RefreshGamesGridSafe();
         };
 
+        _launchGameButton.Text = "Launch Game";
+        _launchGameButton.Height = 32;
+        _launchGameButton.Enabled = false;
+        _launchGameButton.Click += async (_, _) => await LaunchSelectedGameOnTargets();
+
         actions.Controls.AddRange(new Control[]
         {
             _refreshGamesButton,
             _showAllGamesToggle,
-            _requireAllToggle
+            _requireAllToggle,
+            _launchGameButton
         });
 
         var filterGroup = new GroupBox
         {
             Text = "Filter by PC availability",
             Dock = DockStyle.Fill,
-            AutoSize = true
+            AutoSize = false,
+            MinimumSize = new Size(0, 48)
         };
         _filterPanel.FlowDirection = FlowDirection.LeftToRight;
         _filterPanel.AutoSize = true;
@@ -266,8 +274,8 @@ public sealed class LeaderForm : Form
         {
             Text = "Launch targets",
             Dock = DockStyle.Fill,
-            AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink
+            AutoSize = false,
+            MinimumSize = new Size(0, 72)
         };
 
         var launchLayout = new TableLayoutPanel
@@ -290,11 +298,6 @@ public sealed class LeaderForm : Form
             AutoSize = true
         };
 
-        _launchGameButton.Text = "Launch Game";
-        _launchGameButton.Height = 32;
-        _launchGameButton.Enabled = false;
-        _launchGameButton.Click += async (_, _) => await LaunchSelectedGameOnTargets();
-
         _selectAllOnlineButton.Text = "Select all online";
         _selectAllOnlineButton.Height = 32;
         _selectAllOnlineButton.Enabled = false;
@@ -307,7 +310,6 @@ public sealed class LeaderForm : Form
 
         launchButtons.Controls.AddRange(new Control[]
         {
-            _launchGameButton,
             _selectAllOnlineButton,
             _clearTargetsButton
         });
