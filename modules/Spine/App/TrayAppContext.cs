@@ -62,6 +62,7 @@ sealed class TrayAppContext : ApplicationContext
         _agent.ShutdownRequested += () =>
         {
             _appLogger.Info("Shutdown requested by agent.");
+            ShowTrayNotice("DadBoard is closing (update or remote command).", ToolTipIcon.Info);
             _uiContext.Post(_ => Exit(), null);
         };
         _agent.Start();
@@ -481,6 +482,19 @@ sealed class TrayAppContext : ApplicationContext
             _updateLogger.Error($"{label} start failed: {ex}");
             return false;
         }
+    }
+
+    private void ShowTrayNotice(string message, ToolTipIcon icon)
+    {
+        if (!_tray.Visible)
+        {
+            return;
+        }
+
+        _tray.BalloonTipTitle = "DadBoard";
+        _tray.BalloonTipText = message;
+        _tray.BalloonTipIcon = icon;
+        _tray.ShowBalloonTip(3000);
     }
 
     private void Exit()

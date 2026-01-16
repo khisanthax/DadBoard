@@ -211,7 +211,10 @@ public sealed class LeaderForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 4
+            RowCount = 4,
+            AutoScroll = true,
+            Padding = new Padding(8),
+            GrowStyle = TableLayoutPanelGrowStyle.FixedSize
         };
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -222,7 +225,9 @@ public sealed class LeaderForm : Form
         {
             Dock = DockStyle.Fill,
             FlowDirection = FlowDirection.LeftToRight,
-            AutoSize = true
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = false
         };
 
         _refreshGamesButton.Text = "Refresh games";
@@ -254,16 +259,17 @@ public sealed class LeaderForm : Form
         {
             _refreshGamesButton,
             _showAllGamesToggle,
-            _requireAllToggle,
-            _launchGameButton
+            _requireAllToggle
         });
 
         var filterGroup = new GroupBox
         {
             Text = "Filter by PC availability",
             Dock = DockStyle.Fill,
-            AutoSize = false,
-            MinimumSize = new Size(0, 48)
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            MinimumSize = new Size(0, 48),
+            Padding = new Padding(8)
         };
         _filterPanel.FlowDirection = FlowDirection.LeftToRight;
         _filterPanel.AutoSize = true;
@@ -274,8 +280,10 @@ public sealed class LeaderForm : Form
         {
             Text = "Launch targets",
             Dock = DockStyle.Fill,
-            AutoSize = false,
-            MinimumSize = new Size(0, 72)
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            MinimumSize = new Size(0, 72),
+            Padding = new Padding(8)
         };
 
         var launchLayout = new TableLayoutPanel
@@ -310,6 +318,7 @@ public sealed class LeaderForm : Form
 
         launchButtons.Controls.AddRange(new Control[]
         {
+            _launchGameButton,
             _selectAllOnlineButton,
             _clearTargetsButton
         });
@@ -526,15 +535,20 @@ public sealed class LeaderForm : Form
             var leaderCatalog = _service.GetLeaderCatalog();
             var agentInventories = _service.GetAgentInventoriesSnapshot();
             var inventoryErrors = _service.GetAgentInventoryErrorsSnapshot();
-            var remoteAgents = _service.GetAgentsSnapshot()
-                .Where(a => !_service.IsLocalAgent(a.PcId, a.Ip))
+            var allAgents = _service.GetAgentsSnapshot()
                 .OrderBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
                 .ToList();
+            var remoteAgents = allAgents
+                .Where(a => !_service.IsLocalAgent(a.PcId, a.Ip))
+                .ToList();
+            var targetAgents = BuildTargetAgents(allAgents);
+            var localAgent = targetAgents.FirstOrDefault(agent => _service.IsLocalAgent(agent.PcId, agent.Ip));
 
             EnsureGamesGridColumns(remoteAgents);
             UpdateFilterControls(remoteAgents, inventoryErrors);
 
             var inventorySets = BuildInventorySets(agentInventories);
+            EnsureLocalInventorySet(inventorySets, localAgent, leaderCatalog);
             var filtered = ApplyGameFilters(leaderCatalog, inventorySets, inventoryErrors, remoteAgents);
 
             _gamesGrid.Rows.Clear();
@@ -596,7 +610,7 @@ public sealed class LeaderForm : Form
                 _gamesGrid.Rows[0].Selected = true;
             }
 
-            UpdateTargetControls(remoteAgents, inventorySets, inventoryErrors);
+            UpdateTargetControls(targetAgents, inventorySets, inventoryErrors);
             _gamesDirty = false;
             UpdateGameActions();
         }
@@ -1037,13 +1051,15 @@ public sealed class LeaderForm : Form
     {
         var agentInventories = _service.GetAgentInventoriesSnapshot();
         var inventoryErrors = _service.GetAgentInventoryErrorsSnapshot();
-        var remoteAgents = _service.GetAgentsSnapshot()
-            .Where(a => !_service.IsLocalAgent(a.PcId, a.Ip))
+        var allAgents = _service.GetAgentsSnapshot()
             .OrderBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
+        var targetAgents = BuildTargetAgents(allAgents);
+        var localAgent = targetAgents.FirstOrDefault(agent => _service.IsLocalAgent(agent.PcId, agent.Ip));
 
         var inventorySets = BuildInventorySets(agentInventories);
-        UpdateTargetControls(remoteAgents, inventorySets, inventoryErrors);
+        EnsureLocalInventorySet(inventorySets, localAgent, _service.GetLeaderCatalog());
+        UpdateTargetControls(targetAgents, inventorySets, inventoryErrors);
     }
 
     private static Dictionary<string, HashSet<int>> BuildInventorySets(IReadOnlyDictionary<string, GameInventory> inventories)
@@ -1064,6 +1080,42 @@ public sealed class LeaderForm : Form
         }
 
         return map;
+    }
+
+    private List<AgentInfo> BuildTargetAgents(List<AgentInfo> allAgents)
+    {
+        var local = allAgents.FirstOrDefault(agent => _service.IsLocalAgent(agent.PcId, agent.Ip));
+        var targets = new List<AgentInfo>();
+        if (local != null)
+        {
+            local.Name = $"{local.Name} (This PC)";
+            targets.Add(local);
+        }
+
+        targets.AddRange(allAgents.Where(agent => !_service.IsLocalAgent(agent.PcId, agent.Ip)));
+        return targets;
+    }
+
+    private static void EnsureLocalInventorySet(
+        Dictionary<string, HashSet<int>> inventorySets,
+        AgentInfo? localAgent,
+        IReadOnlyList<SteamGameEntry> leaderCatalog)
+    {
+        if (localAgent == null || inventorySets.ContainsKey(localAgent.PcId))
+        {
+            return;
+        }
+
+        var set = new HashSet<int>();
+        foreach (var game in leaderCatalog)
+        {
+            if (game.AppId > 0)
+            {
+                set.Add(game.AppId);
+            }
+        }
+
+        inventorySets[localAgent.PcId] = set;
     }
 
     private List<SteamGameEntry> ApplyGameFilters(
@@ -1156,13 +1208,13 @@ public sealed class LeaderForm : Form
     }
 
     private void UpdateTargetControls(
-        List<AgentInfo> remoteAgents,
+        List<AgentInfo> targetAgents,
         Dictionary<string, HashSet<int>> inventorySets,
         IReadOnlyDictionary<string, string> inventoryErrors)
     {
         var selected = GetSelectedGame();
         var selectedAppId = selected?.AppId;
-        var keep = new HashSet<string>(remoteAgents.Select(a => a.PcId), StringComparer.OrdinalIgnoreCase);
+        var keep = new HashSet<string>(targetAgents.Select(a => a.PcId), StringComparer.OrdinalIgnoreCase);
         _suppressTargetEvents = true;
 
         foreach (var pcId in _targetCheckboxes.Keys.Where(pcId => !keep.Contains(pcId)).ToList())
@@ -1185,7 +1237,7 @@ public sealed class LeaderForm : Form
             _selectedTargets.Remove(pcId);
         }
 
-        foreach (var agent in remoteAgents)
+        foreach (var agent in targetAgents)
         {
             if (!_targetCheckboxes.TryGetValue(agent.PcId, out var checkbox))
             {
