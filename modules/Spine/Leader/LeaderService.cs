@@ -1695,6 +1695,28 @@ public sealed class LeaderService : IDisposable
         _logger.Warn($"Update failed pcId={agent.PcId} error={agent.LastError}");
     }
 
+    private void MarkUpdateNoChange(AgentInfo agent, string message)
+    {
+        if (string.IsNullOrWhiteSpace(agent.UpdateVersionBefore))
+        {
+            agent.UpdateVersionBefore = agent.UpdatePreviousVersion;
+        }
+        if (string.IsNullOrWhiteSpace(agent.UpdateVersionAfter))
+        {
+            agent.UpdateVersionAfter = agent.Version ?? "";
+        }
+
+        agent.UpdateStatus = "idle";
+        agent.UpdateMessage = message;
+        agent.UpdateInProgress = false;
+        agent.LastResult = "Up-to-date";
+        agent.LastError = "None";
+        agent.UpdateLastError = "";
+        agent.UpdateLastResult = "up-to-date";
+        agent.UpdateDisabledUntilUtc = "";
+        _logger.Info($"Update complete (no change) pcId={agent.PcId} message={message}");
+    }
+
     private static string BuildUpdateResult(string before, string after, bool success, string errorCode)
     {
         var normalizedBefore = NormalizeIfPresent(before);
@@ -1824,6 +1846,16 @@ public sealed class LeaderService : IDisposable
         else if (normalized is "failed")
         {
             MarkUpdateFailed(agent, message);
+        }
+        else if (normalized is "idle")
+        {
+            var lastResult = status.LastResult ?? "";
+            var isUpToDate = lastResult.Equals("up-to-date", StringComparison.OrdinalIgnoreCase) ||
+                             message.IndexOf("up to date", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (agent.UpdateInProgress && isUpToDate)
+            {
+                MarkUpdateNoChange(agent, string.IsNullOrWhiteSpace(message) ? "Up to date." : message);
+            }
         }
 
         if (wasDisabled && !agent.UpdateDisabled)
