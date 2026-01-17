@@ -115,7 +115,11 @@ public sealed class LeaderForm : Form
         _refreshHandler = (_, _) => RefreshAllSafe();
         _refreshTimer.Tick += _refreshHandler;
 
-        Shown += (_, _) => StartRefresh();
+        Shown += (_, _) =>
+        {
+            StartRefresh();
+            ApplyGamesSplitter();
+        };
         VisibleChanged += (_, _) =>
         {
             if (Visible)
@@ -216,39 +220,32 @@ public sealed class LeaderForm : Form
 
     private Control BuildGamesTab()
     {
-        const int launchMinWidth = 280;
-        const int listMinWidth = 400;
-
-        _gamesSplit.Dock = DockStyle.Fill;
-        _gamesSplit.Orientation = Orientation.Vertical;
-        _gamesSplit.SplitterWidth = 8;
-        _gamesSplit.IsSplitterFixed = false;
-        _gamesSplit.Panel2MinSize = launchMinWidth;
-        _gamesSplit.Panel1MinSize = listMinWidth;
-        _gamesSplit.SplitterDistance = 780;
-        _gamesSplit.Panel1.Padding = new Padding(8);
-        _gamesSplit.Panel2.Padding = new Padding(8);
-        _gamesSplit.Resize += (_, _) =>
+        try
         {
-            var panelWidth = _gamesSplit.Panel2.Width;
-            if (panelWidth < launchMinWidth)
+            const int launchMinWidth = 280;
+            const int listMinWidth = 400;
+
+            _gamesSplit.Dock = DockStyle.Fill;
+            _gamesSplit.Orientation = Orientation.Vertical;
+            _gamesSplit.SplitterWidth = 8;
+            _gamesSplit.IsSplitterFixed = false;
+            _gamesSplit.Panel2MinSize = launchMinWidth;
+            _gamesSplit.Panel1MinSize = listMinWidth;
+            _gamesSplit.Panel1.Padding = new Padding(8);
+            _gamesSplit.Panel2.Padding = new Padding(8);
+            _gamesSplit.Resize += (_, _) => EnsureSplitterValid();
+            _gamesSplit.SplitterMoved += (_, _) => EnsureSplitterValid();
+
+            var leftPanel = new TableLayoutPanel
             {
-                var desired = Math.Max(listMinWidth, _gamesSplit.Width - launchMinWidth - _gamesSplit.SplitterWidth);
-                _gamesSplit.SplitterDistance = desired;
-                _service.LogGamesRefresh($"Launch targets width too small ({panelWidth}px); enforcing minimum {launchMinWidth}px.");
-            }
-        };
-
-        var leftPanel = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 4
-        };
-        leftPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        leftPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        leftPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        leftPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 4
+            };
+            leftPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            leftPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            leftPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            leftPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         var actions = new FlowLayoutPanel
         {
@@ -379,9 +376,15 @@ public sealed class LeaderForm : Form
         leftPanel.Controls.Add(_filterSummaryLabel, 0, 2);
         leftPanel.Controls.Add(BuildGamesGrid(), 0, 3);
 
-        _gamesSplit.Panel1.Controls.Add(leftPanel);
-        _gamesSplit.Panel2.Controls.Add(launchGroup);
-        return _gamesSplit;
+            _gamesSplit.Panel1.Controls.Add(leftPanel);
+            _gamesSplit.Panel2.Controls.Add(launchGroup);
+            return _gamesSplit;
+        }
+        catch (Exception ex)
+        {
+            _service.LogGamesRefresh($"BuildGamesTab failed: {ex.Message}");
+            return BuildGamesFallback(ex.Message);
+        }
     }
     private Control BuildAgentsGrid()
     {
@@ -985,6 +988,103 @@ public sealed class LeaderForm : Form
         var beforeText = before?.ToString() ?? "-";
         var afterText = after?.ToString() ?? "-";
         _service.LogGamesRefresh($"Games refresh selection before={beforeText} after={afterText}");
+    }
+
+    private Control BuildGamesFallback(string message)
+    {
+        var panel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            Padding = new Padding(16)
+        };
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var label = new Label
+        {
+            AutoSize = true,
+            Text = $"Games UI failed to load. See app.log. Error: {message}"
+        };
+
+        var retryButton = new Button
+        {
+            Text = "Retry Games UI",
+            AutoSize = true
+        };
+        retryButton.Click += (_, _) =>
+        {
+            _gamesTab.Controls.Clear();
+            _gamesTab.Controls.Add(BuildGamesTab());
+            ApplyGamesSplitter();
+        };
+
+        panel.Controls.Add(label, 0, 0);
+        panel.Controls.Add(retryButton, 0, 1);
+        return panel;
+    }
+
+    private int ClampSplitterDistance(SplitContainer sc, int desired)
+    {
+        if (sc.Width <= 0)
+        {
+            _service.LogGamesRefresh("SplitContainer width=0; deferring SplitterDistance.");
+            return desired;
+        }
+
+        var min = sc.Panel1MinSize;
+        var max = sc.Width - sc.Panel2MinSize;
+        if (max < min)
+        {
+            max = min;
+        }
+
+        var clamped = Math.Min(Math.Max(desired, min), max);
+        _service.LogGamesRefresh($"SplitContainer width={sc.Width} desired={desired} min={min} max={max} clamped={clamped}");
+        return clamped;
+    }
+
+    private void ApplyGamesSplitter()
+    {
+        if (_gamesSplit.IsDisposed)
+        {
+            return;
+        }
+
+        if (_gamesSplit.Width <= 0)
+        {
+            _service.LogGamesRefresh("SplitContainer width=0; deferring SplitterDistance.");
+            return;
+        }
+
+        var desired = (int)(_gamesSplit.Width * 0.7);
+        var clamped = ClampSplitterDistance(_gamesSplit, desired);
+        if (_gamesSplit.SplitterDistance != clamped)
+        {
+            _gamesSplit.SplitterDistance = clamped;
+        }
+    }
+
+    private void EnsureSplitterValid()
+    {
+        if (_gamesSplit.IsDisposed)
+        {
+            return;
+        }
+
+        if (_gamesSplit.Width <= 0)
+        {
+            return;
+        }
+
+        var desired = _gamesSplit.SplitterDistance;
+        var clamped = ClampSplitterDistance(_gamesSplit, desired);
+        if (clamped != desired)
+        {
+            _gamesSplit.SplitterDistance = clamped;
+            _service.LogGamesRefresh($"SplitContainer distance corrected to {clamped}.");
+        }
     }
 
     private void QueueGamesRefresh(string reason)
