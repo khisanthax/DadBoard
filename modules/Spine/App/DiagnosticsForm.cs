@@ -250,42 +250,48 @@ public sealed class DiagnosticsForm : Form
         }, TaskScheduler.FromCurrentSynchronizationContext());
     }
 
-    private void LoadAgentLaunchStatusAsync()
+    private async void LoadAgentLaunchStatusAsync()
     {
-        _ = Task.Run(() =>
+        LaunchSnapshot result;
+        try
         {
-            var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DadBoard", "Agent", "agent_state.json");
-            if (!File.Exists(path))
+            result = await Task.Run(() =>
             {
-                return new LaunchSnapshot("-", "-", "");
-            }
+                var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DadBoard", "Agent", "agent_state.json");
+                if (!File.Exists(path))
+                {
+                    return new LaunchSnapshot("-", "-", "");
+                }
 
-            try
-            {
-                var json = File.ReadAllText(path);
-                using var doc = JsonDocument.Parse(json);
-                var root = doc.RootElement;
-                var state = root.TryGetProperty("lastLaunchState", out var stateProp) ? stateProp.GetString() ?? "-" : "-";
-                var message = root.TryGetProperty("lastLaunchMessage", out var msgProp) ? msgProp.GetString() ?? "-" : "-";
-                var errorClass = root.TryGetProperty("lastLaunchErrorClass", out var errProp) ? errProp.GetString() ?? "" : "";
-                return new LaunchSnapshot(state, message, errorClass);
-            }
-            catch
-            {
-                return new LaunchSnapshot("-", "Failed to read agent_state.json", "");
-            }
-        }).ContinueWith(task =>
+                try
+                {
+                    var json = File.ReadAllText(path);
+                    using var doc = JsonDocument.Parse(json);
+                    var root = doc.RootElement;
+                    var state = root.TryGetProperty("lastLaunchState", out var stateProp) ? stateProp.GetString() ?? "-" : "-";
+                    var message = root.TryGetProperty("lastLaunchMessage", out var msgProp) ? msgProp.GetString() ?? "-" : "-";
+                    var errorClass = root.TryGetProperty("lastLaunchErrorClass", out var errProp) ? errProp.GetString() ?? "" : "";
+                    return new LaunchSnapshot(state, message, errorClass);
+                }
+                catch
+                {
+                    return new LaunchSnapshot("-", "Failed to read agent_state.json", "");
+                }
+            }).ConfigureAwait(true);
+        }
+        catch
         {
-            if (IsDisposed || Disposing)
-            {
-                return;
-            }
+            result = new LaunchSnapshot("-", "Failed to read agent_state.json", "");
+        }
 
-            var result = task.IsFaulted ? new LaunchSnapshot("-", "Failed to read agent_state.json", "") : task.Result;
-            var suffix = string.IsNullOrWhiteSpace(result.ErrorClass) ? "" : $" ({result.ErrorClass})";
-            _lastLaunchState.Text = string.IsNullOrWhiteSpace(result.State) ? "-" : result.State;
-            _lastLaunchMessage.Text = string.IsNullOrWhiteSpace(result.Message) ? "-" : result.Message + suffix;
-        }, TaskScheduler.FromCurrentSynchronizationContext());
+        if (IsDisposed || Disposing)
+        {
+            return;
+        }
+
+        var suffix = string.IsNullOrWhiteSpace(result.ErrorClass) ? "" : $" ({result.ErrorClass})";
+        _lastLaunchState.Text = string.IsNullOrWhiteSpace(result.State) ? "-" : result.State;
+        _lastLaunchMessage.Text = string.IsNullOrWhiteSpace(result.Message) ? "-" : result.Message + suffix;
     }
 
     private void OpenLogsFolder()

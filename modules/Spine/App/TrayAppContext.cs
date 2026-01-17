@@ -43,6 +43,7 @@ sealed class TrayAppContext : ApplicationContext
     private bool _disposed;
     private readonly UpdateLogger _updateLogger = new();
     private readonly AppLogger _appLogger;
+    private int _exitRequested;
 
     public TrayAppContext(AppLaunchOptions options, AppLogger appLogger)
     {
@@ -499,7 +500,13 @@ sealed class TrayAppContext : ApplicationContext
 
     private void Exit()
     {
-        _appLogger.Info("TrayAppContext exit requested.");
+        // Tray exit is authoritative: stop services and terminate the process.
+        if (Interlocked.Exchange(ref _exitRequested, 1) == 1)
+        {
+            return;
+        }
+
+        _appLogger.Info("TrayAppContext exit requested from tray.");
         _tray.Visible = false;
         _leaderForm?.AllowClose();
         _leaderForm?.Close();
@@ -507,8 +514,17 @@ sealed class TrayAppContext : ApplicationContext
         _statusForm?.Close();
         _diagnosticsForm?.Close();
         _leader?.Dispose();
+        _appLogger.Info("Stopping agent service.");
+        _agent.Stop();
         Dispose();
         ExitThread();
+        Application.Exit();
+        _ = Task.Run(() =>
+        {
+            Thread.Sleep(3000);
+            _appLogger.Warn("Force exiting after tray exit.");
+            Environment.Exit(0);
+        });
     }
 
     protected override void Dispose(bool disposing)

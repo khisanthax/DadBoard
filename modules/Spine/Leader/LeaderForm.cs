@@ -27,9 +27,11 @@ public sealed class LeaderForm : Form
     private readonly Button _refreshGamesButton = new();
     private readonly CheckBox _showAllGamesToggle = new();
     private readonly CheckBox _requireAllToggle = new();
+    private readonly Label _filterSummaryLabel = new();
     private readonly FlowLayoutPanel _filterPanel = new();
     private readonly FlowLayoutPanel _targetPanel = new();
-    private readonly Button _launchGameButton = new();
+    private readonly Button _launchAllOnlineButton = new();
+    private readonly Button _launchSelectedButton = new();
     private readonly Button _selectAllOnlineButton = new();
     private readonly Button _clearTargetsButton = new();
 
@@ -62,6 +64,9 @@ public sealed class LeaderForm : Form
     private int? _pendingLaunchAppId;
     private int? _lastSelectedGameAppId;
     private bool _suppressTargetEvents;
+    private bool _lastLaunchAllEnabled;
+    private bool _lastLaunchSelectedEnabled;
+    private string _lastLaunchReason = "";
 
     public LeaderForm(LeaderService service)
     {
@@ -210,16 +215,25 @@ public sealed class LeaderForm : Form
         var panel = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 4,
+            ColumnCount = 2,
+            RowCount = 1,
             AutoScroll = true,
             Padding = new Padding(8),
             GrowStyle = TableLayoutPanelGrowStyle.FixedSize
         };
-        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+        var leftPanel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 4
+        };
+        leftPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        leftPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        leftPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        leftPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         var actions = new FlowLayoutPanel
         {
@@ -249,11 +263,18 @@ public sealed class LeaderForm : Form
             _gamesDirty = true;
             RefreshGamesGridSafe();
         };
+        _requireAllToggle.Checked = true;
+        _requireAllToggle.Visible = false;
 
-        _launchGameButton.Text = "Launch Game";
-        _launchGameButton.Height = 32;
-        _launchGameButton.Enabled = false;
-        _launchGameButton.Click += async (_, _) => await LaunchSelectedGameOnTargets();
+        _launchAllOnlineButton.Text = "Launch All Online";
+        _launchAllOnlineButton.Height = 32;
+        _launchAllOnlineButton.Enabled = false;
+        _launchAllOnlineButton.Click += async (_, _) => await LaunchAllOnlineTargets();
+
+        _launchSelectedButton.Text = "Launch Selected";
+        _launchSelectedButton.Height = 32;
+        _launchSelectedButton.Enabled = false;
+        _launchSelectedButton.Click += async (_, _) => await LaunchSelectedTargets();
 
         actions.Controls.AddRange(new Control[]
         {
@@ -276,14 +297,19 @@ public sealed class LeaderForm : Form
         _filterPanel.Dock = DockStyle.Fill;
         filterGroup.Controls.Add(_filterPanel);
 
+        _filterSummaryLabel.AutoSize = true;
+        _filterSummaryLabel.Dock = DockStyle.Fill;
+        _filterSummaryLabel.ForeColor = SystemColors.GrayText;
+
         var launchGroup = new GroupBox
         {
             Text = "Launch targets",
-            Dock = DockStyle.Fill,
+            Dock = DockStyle.Top,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             MinimumSize = new Size(0, 72),
-            Padding = new Padding(8)
+            Padding = new Padding(8),
+            Anchor = AnchorStyles.Top | AnchorStyles.Right
         };
 
         var launchLayout = new TableLayoutPanel
@@ -318,7 +344,8 @@ public sealed class LeaderForm : Form
 
         launchButtons.Controls.AddRange(new Control[]
         {
-            _launchGameButton,
+            _launchAllOnlineButton,
+            _launchSelectedButton,
             _selectAllOnlineButton,
             _clearTargetsButton
         });
@@ -327,10 +354,14 @@ public sealed class LeaderForm : Form
         launchLayout.Controls.Add(launchButtons, 0, 1);
         launchGroup.Controls.Add(launchLayout);
 
-        panel.Controls.Add(actions, 0, 0);
-        panel.Controls.Add(filterGroup, 0, 1);
-        panel.Controls.Add(launchGroup, 0, 2);
-        panel.Controls.Add(BuildGamesGrid(), 0, 3);
+        leftPanel.Controls.Add(actions, 0, 0);
+        leftPanel.Controls.Add(filterGroup, 0, 1);
+        leftPanel.Controls.Add(_filterSummaryLabel, 0, 2);
+        leftPanel.Controls.Add(BuildGamesGrid(), 0, 3);
+
+        panel.Controls.Add(leftPanel, 0, 0);
+        panel.Controls.Add(launchGroup, 1, 0);
+        panel.SetColumnSpan(launchGroup, 1);
         return panel;
     }
     private Control BuildAgentsGrid()
@@ -530,6 +561,7 @@ public sealed class LeaderForm : Form
 
         try
         {
+            // Games tab targets + availability filtering are driven by LeaderForm using LeaderService snapshots.
             var selectedAppId = GetSelectedGameAppId();
 
             var leaderCatalog = _service.GetLeaderCatalog();
@@ -550,6 +582,7 @@ public sealed class LeaderForm : Form
             var inventorySets = BuildInventorySets(agentInventories);
             EnsureLocalInventorySet(inventorySets, localAgent, leaderCatalog);
             var filtered = ApplyGameFilters(leaderCatalog, inventorySets, inventoryErrors, remoteAgents);
+            UpdateFilterSummary(remoteAgents);
 
             _gamesGrid.Rows.Clear();
             foreach (var game in filtered)
@@ -613,6 +646,7 @@ public sealed class LeaderForm : Form
             UpdateTargetControls(targetAgents, inventorySets, inventoryErrors);
             _gamesDirty = false;
             UpdateGameActions();
+            _service.LogGamesUiState(filtered.Count, _selectedTargets.Count, targetAgents.Count);
         }
         catch (Exception ex)
         {
@@ -710,7 +744,7 @@ public sealed class LeaderForm : Form
         Task.Run(() => _service.RefreshSteamInventory());
     }
 
-    private async Task LaunchSelectedGameOnTargets()
+    private async Task LaunchSelectedTargets()
     {
         var selection = GetSelectedGame();
         if (selection == null)
@@ -728,23 +762,65 @@ public sealed class LeaderForm : Form
             return;
         }
 
-        _launchGameButton.Enabled = false;
+        _launchSelectedButton.Enabled = false;
+        _launchAllOnlineButton.Enabled = false;
         _statusLabel.Text = $"Launching {selection.Value.Name} on {checkedPcs.Count} PC(s)...";
 
-        var failures = new List<string>();
-        var successes = new List<string>();
-        foreach (var pcId in checkedPcs)
+        var (successes, failures) = await LaunchOnTargets(selection.Value.AppId, checkedPcs);
+
+        if (successes.Count == 0)
         {
-            var result = await _service.LaunchAppIdOnAgentAsync(selection.Value.AppId, pcId);
-            if (!result.Ok)
+            var message = "Launch failed: no targets accepted the command.";
+            if (failures.Count > 0)
             {
-                failures.Add($"{pcId}: {result.Error ?? "Unknown error"}");
-                continue;
+                message = $"Launch failed:{Environment.NewLine}{string.Join(Environment.NewLine, failures)}";
             }
 
-            successes.Add(pcId);
+            MessageBox.Show(message, "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            _statusLabel.Text = "Launch failed: no targets accepted the command.";
+            UpdateGameActions();
+            return;
         }
 
+        _pendingLaunchTargets = new HashSet<string>(successes, StringComparer.OrdinalIgnoreCase);
+        _pendingLaunchAppId = selection.Value.AppId;
+        _statusLabel.Text = $"Launching {selection.Value.Name} on {successes.Count} PC(s)...";
+        UpdateGameActions();
+        RefreshAgentsGridSafe();
+
+        if (failures.Count > 0)
+        {
+            MessageBox.Show(
+                $"Some targets failed to accept the command:{Environment.NewLine}{string.Join(Environment.NewLine, failures)}",
+                "DadBoard",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+    }
+
+    private async Task LaunchAllOnlineTargets()
+    {
+        var selection = GetSelectedGame();
+        if (selection == null)
+        {
+            MessageBox.Show("Select a game row first.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var onlineTargets = GetEligibleOnlineTargetPcIds();
+        _service.LogLaunchRequest(selection.Value.AppId, selection.Value.Name, onlineTargets);
+        if (onlineTargets.Count == 0)
+        {
+            MessageBox.Show("No online targets available for this game.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            _statusLabel.Text = "Launch failed: no online targets available.";
+            return;
+        }
+
+        _launchSelectedButton.Enabled = false;
+        _launchAllOnlineButton.Enabled = false;
+        _statusLabel.Text = $"Launching {selection.Value.Name} on {onlineTargets.Count} PC(s)...";
+
+        var (successes, failures) = await LaunchOnTargets(selection.Value.AppId, onlineTargets);
         if (successes.Count == 0)
         {
             var message = "Launch failed: no targets accepted the command.";
@@ -869,6 +945,40 @@ public sealed class LeaderForm : Form
         }
     }
 
+    private async Task<(List<string> Successes, List<string> Failures)> LaunchOnTargets(int appId, List<string> targets)
+    {
+        var failures = new List<string>();
+        var successes = new List<string>();
+        foreach (var pcId in targets)
+        {
+            var result = await _service.LaunchAppIdOnAgentAsync(appId, pcId);
+            if (!result.Ok)
+            {
+                failures.Add($"{pcId}: {result.Error ?? "Unknown error"}");
+                continue;
+            }
+
+            successes.Add(pcId);
+        }
+
+        return (successes, failures);
+    }
+
+    private void UpdateFilterSummary(List<AgentInfo> remoteAgents)
+    {
+        var checkedPcIds = _filterCheckboxes
+            .Where(kv => kv.Value.Checked)
+            .Select(kv => kv.Key)
+            .ToList();
+        if (checkedPcIds.Count == 0)
+        {
+            _filterSummaryLabel.Text = $"Filter: default (games on any remote PC, total {remoteAgents.Count})";
+            return;
+        }
+
+        _filterSummaryLabel.Text = $"Filter: Available on ALL selected PCs ({checkedPcIds.Count})";
+    }
+
     private static string BuildTargetStatus(AgentInfo agent)
     {
         var status = agent.Online ? "Online" : "Offline";
@@ -877,7 +987,8 @@ public sealed class LeaderForm : Form
             status += $" | {FormatCommandStatus(agent.LastStatus)}";
         }
 
-        if (!string.IsNullOrWhiteSpace(agent.LastError))
+        if (!string.IsNullOrWhiteSpace(agent.LastError) &&
+            !string.Equals(agent.LastError, "none", StringComparison.OrdinalIgnoreCase))
         {
             status += $" | Err: {Truncate(agent.LastError, 40)}";
         }
@@ -1143,15 +1254,10 @@ public sealed class LeaderForm : Form
         }
         else
         {
-            var requireAll = _requireAllToggle.Checked;
-            games = games.Where(game =>
-                requireAll
-                    ? filterPcIds.All(pcId => !inventoryErrors.ContainsKey(pcId) &&
-                                             inventorySets.TryGetValue(pcId, out var set) &&
-                                             set.Contains(game.AppId))
-                    : filterPcIds.Any(pcId => !inventoryErrors.ContainsKey(pcId) &&
-                                             inventorySets.TryGetValue(pcId, out var set) &&
-                                             set.Contains(game.AppId)));
+        games = games.Where(game =>
+            filterPcIds.All(pcId => !inventoryErrors.ContainsKey(pcId) &&
+                                     inventorySets.TryGetValue(pcId, out var set) &&
+                                     set.Contains(game.AppId)));
         }
 
         return games
@@ -1195,15 +1301,18 @@ public sealed class LeaderForm : Form
 
             if (inventoryErrors.TryGetValue(agent.PcId, out var error))
             {
-                checkbox.Checked = false;
-                checkbox.Enabled = false;
-                _toolTip.SetToolTip(checkbox, error);
+                if (!string.IsNullOrWhiteSpace(error) &&
+                    !string.Equals(error, "none", StringComparison.OrdinalIgnoreCase))
+                {
+                    checkbox.Checked = false;
+                    checkbox.Enabled = false;
+                    _toolTip.SetToolTip(checkbox, error);
+                    continue;
+                }
             }
-            else
-            {
-                checkbox.Enabled = true;
-                _toolTip.SetToolTip(checkbox, "");
-            }
+
+            checkbox.Enabled = true;
+            _toolTip.SetToolTip(checkbox, "");
         }
     }
 
@@ -1295,59 +1404,71 @@ public sealed class LeaderForm : Form
             {
                 label.Text = BuildTargetStatus(agent);
                 label.ForeColor = agent.Online ? SystemColors.WindowText : SystemColors.GrayText;
-                _toolTip.SetToolTip(label, agent.LastError ?? "");
+                var lastError = string.Equals(agent.LastError, "none", StringComparison.OrdinalIgnoreCase) ? "" : agent.LastError;
+                _toolTip.SetToolTip(label, lastError ?? "");
             }
 
             if (!selectedAppId.HasValue)
             {
                 checkbox.Checked = _selectedTargets.Contains(agent.PcId);
-                checkbox.Enabled = false;
-                _toolTip.SetToolTip(checkbox, "Select a game to enable targets.");
-                _targetEligibility[agent.PcId] = false;
+                SetTargetEligibility(agent, checkbox, enabled: false, reason: "Select a game to enable targets.");
                 continue;
             }
 
-            if (inventoryErrors.TryGetValue(agent.PcId, out var error))
+            if (inventoryErrors.TryGetValue(agent.PcId, out var error) &&
+                !string.IsNullOrWhiteSpace(error) &&
+                !string.Equals(error, "none", StringComparison.OrdinalIgnoreCase))
             {
                 checkbox.Checked = _selectedTargets.Contains(agent.PcId);
-                checkbox.Enabled = false;
-                _toolTip.SetToolTip(checkbox, error);
-                _targetEligibility[agent.PcId] = false;
+                SetTargetEligibility(agent, checkbox, enabled: false, reason: error);
                 continue;
             }
 
-            var installed = inventorySets.TryGetValue(agent.PcId, out var set) && set.Contains(selectedAppId.Value);
-            if (!installed)
+            var hasInventory = inventorySets.TryGetValue(agent.PcId, out var set);
+            var installed = hasInventory && set!.Contains(selectedAppId.Value);
+            if (hasInventory && !installed)
             {
                 checkbox.Checked = _selectedTargets.Contains(agent.PcId);
-                checkbox.Enabled = false;
-                _toolTip.SetToolTip(checkbox, "Not installed on this PC.");
-                _targetEligibility[agent.PcId] = false;
+                SetTargetEligibility(agent, checkbox, enabled: false, reason: "Not installed on this PC.");
                 continue;
             }
 
             if (!agent.Online)
             {
                 checkbox.Checked = _selectedTargets.Contains(agent.PcId);
-                checkbox.Enabled = false;
-                _toolTip.SetToolTip(checkbox, "PC is offline.");
-                _targetEligibility[agent.PcId] = false;
+                SetTargetEligibility(agent, checkbox, enabled: false, reason: "PC is offline.");
                 continue;
             }
 
             checkbox.Enabled = true;
             checkbox.Checked = _selectedTargets.Contains(agent.PcId);
-            _toolTip.SetToolTip(checkbox, "Installed.");
-            _targetEligibility[agent.PcId] = true;
+            var reason = installed ? "Installed." : "Inventory not available; launch may fail.";
+            SetTargetEligibility(agent, checkbox, enabled: true, reason: reason);
         }
 
         _suppressTargetEvents = false;
+    }
+
+    private void SetTargetEligibility(AgentInfo agent, CheckBox checkbox, bool enabled, string reason)
+    {
+        checkbox.Enabled = enabled;
+        _toolTip.SetToolTip(checkbox, reason);
+        _targetEligibility[agent.PcId] = enabled;
+        _service.LogTargetEligibility(agent.PcId, agent.Name, enabled, reason);
     }
 
     private List<string> GetCheckedTargetPcIds()
     {
         return _selectedTargets
             .Where(pcId => _targetEligibility.TryGetValue(pcId, out var eligible) && eligible)
+            .ToList();
+    }
+
+    private List<string> GetEligibleOnlineTargetPcIds()
+    {
+        return _targetEligibility
+            .Where(kv => kv.Value)
+            .Select(kv => kv.Key)
             .ToList();
     }
 
@@ -1391,22 +1512,58 @@ public sealed class LeaderForm : Form
     private void UpdateGameActions()
     {
         var selection = GetSelectedGame();
+        var reason = "";
         if (selection == null)
         {
-            _launchGameButton.Enabled = false;
+            _launchAllOnlineButton.Enabled = false;
+            _launchSelectedButton.Enabled = false;
             _selectAllOnlineButton.Enabled = false;
             _clearTargetsButton.Enabled = _selectedTargets.Count > 0;
-            _toolTip.SetToolTip(_launchGameButton, "Select a game and at least one target PC.");
+            _toolTip.SetToolTip(_launchAllOnlineButton, "Select a game to enable launch.");
+            _toolTip.SetToolTip(_launchSelectedButton, "Select a game and at least one target PC.");
+            reason = "disabled: no game selected";
             UpdateAgentActions();
+            LogLaunchButtonState(reason);
             return;
         }
 
         var checkedTargets = GetCheckedTargetPcIds();
-        _launchGameButton.Enabled = checkedTargets.Count > 0 && _pendingLaunchTargets == null;
+        var onlineTargets = GetEligibleOnlineTargetPcIds();
+        _launchAllOnlineButton.Enabled = onlineTargets.Count > 0 && _pendingLaunchTargets == null;
+        _launchSelectedButton.Enabled = checkedTargets.Count > 0 && _pendingLaunchTargets == null;
         _selectAllOnlineButton.Enabled = _targetCheckboxes.Values.Any(cb => cb.Enabled);
         _clearTargetsButton.Enabled = _selectedTargets.Count > 0;
-        _toolTip.SetToolTip(_launchGameButton, _launchGameButton.Enabled ? "" : "Select a game and at least one target PC.");
+        _toolTip.SetToolTip(_launchAllOnlineButton, _launchAllOnlineButton.Enabled ? "" : "Select a game and at least one online target PC.");
+        _toolTip.SetToolTip(_launchSelectedButton, _launchSelectedButton.Enabled ? "" : "Select a game and at least one target PC.");
+        if (!_launchAllOnlineButton.Enabled && onlineTargets.Count == 0)
+        {
+            reason = "disabled: no online targets";
+        }
+        else if (!_launchSelectedButton.Enabled && checkedTargets.Count == 0)
+        {
+            reason = "disabled: no selected targets";
+        }
+        else
+        {
+            reason = "enabled";
+        }
         UpdateAgentActions();
+        LogLaunchButtonState(reason);
+    }
+
+    private void LogLaunchButtonState(string reason)
+    {
+        if (_lastLaunchAllEnabled == _launchAllOnlineButton.Enabled &&
+            _lastLaunchSelectedEnabled == _launchSelectedButton.Enabled &&
+            string.Equals(_lastLaunchReason, reason, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        _lastLaunchAllEnabled = _launchAllOnlineButton.Enabled;
+        _lastLaunchSelectedEnabled = _launchSelectedButton.Enabled;
+        _lastLaunchReason = reason;
+        _service.LogLaunchButtonsState(_launchAllOnlineButton.Enabled, _launchSelectedButton.Enabled, reason);
     }
 
     private void UpdateLaunchProgress(IReadOnlyList<AgentInfo> snapshot)

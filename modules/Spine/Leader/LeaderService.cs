@@ -269,6 +269,7 @@ public sealed class LeaderService : IDisposable
 
     public IReadOnlyList<AgentInfo> GetAgentsSnapshot()
     {
+        EnsureLocalAgentEntry();
         return _agents.Values.Select(a => new AgentInfo
         {
             PcId = a.PcId,
@@ -349,6 +350,7 @@ public sealed class LeaderService : IDisposable
 
     public async Task<(bool Ok, string? Error)> LaunchAppIdOnAgentAsync(int appId, string pcId)
     {
+        EnsureLocalAgentEntry();
         if (!_agents.TryGetValue(pcId, out var agent))
         {
             return (false, "Agent not found.");
@@ -372,6 +374,30 @@ public sealed class LeaderService : IDisposable
             _logger.Error($"LaunchGame failed for {agent.Name}: {ex}");
             return (false, ex.Message);
         }
+    }
+
+    private void EnsureLocalAgentEntry()
+    {
+        if (string.IsNullOrWhiteSpace(_localAgentPcId))
+        {
+            return;
+        }
+
+        if (_agents.ContainsKey(_localAgentPcId))
+        {
+            return;
+        }
+
+        var localAgent = new AgentInfo
+        {
+            PcId = _localAgentPcId,
+            Name = Environment.MachineName,
+            Ip = "127.0.0.1",
+            WsPort = _config.WsPortDefault,
+            LastSeen = DateTime.UtcNow,
+            Online = true
+        };
+        _agents[_localAgentPcId] = localAgent;
     }
 
     public void LaunchAppIdOnAgents(int appId, IEnumerable<string> pcIds)
@@ -1259,6 +1285,21 @@ public sealed class LeaderService : IDisposable
     {
         var targets = string.Join(",", pcIds);
         _logger.Info($"Targets selected=[{targets}]");
+    }
+
+    public void LogTargetEligibility(string pcId, string name, bool enabled, string reason)
+    {
+        _logger.Info($"Target eligibility pcId={pcId} name={name} enabled={enabled} reason={reason}");
+    }
+
+    public void LogGamesUiState(int gamesCount, int selectedTargets, int targetCount)
+    {
+        _logger.Info($"Games UI state games={gamesCount} selectedTargets={selectedTargets} targets={targetCount}");
+    }
+
+    public void LogLaunchButtonsState(bool allOnlineEnabled, bool selectedEnabled, string reason)
+    {
+        _logger.Info($"Launch buttons state allOnline={allOnlineEnabled} selected={selectedEnabled} reason={reason}");
     }
 
     private async Task SendLaunchExe(AgentInfo agent, string exePath)
