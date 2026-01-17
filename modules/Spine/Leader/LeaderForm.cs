@@ -1049,7 +1049,7 @@ public sealed class LeaderForm : Form
         return panel;
     }
 
-    private int ClampSplitterDistance(SplitContainer sc, int desired)
+    private bool TryClampSplitterDistance(SplitContainer sc, int desired, out int clamped)
     {
         var width = sc.ClientSize.Width;
         var min = sc.Panel1MinSize;
@@ -1057,12 +1057,13 @@ public sealed class LeaderForm : Form
         if (width <= 0 || max <= min)
         {
             LogSplitterWarn(width, min, max, desired, sc.SplitterDistance);
-            return desired;
+            clamped = desired;
+            return false;
         }
 
-        var clamped = Math.Min(Math.Max(desired, min), max);
+        clamped = Math.Min(Math.Max(desired, min), max);
         LogSplitterInfo(width, min, max, desired, clamped);
-        return clamped;
+        return true;
     }
 
     private void ApplyGamesSplitter()
@@ -1072,14 +1073,11 @@ public sealed class LeaderForm : Form
             return;
         }
 
-        if (_gamesSplit.ClientSize.Width <= 0)
+        var desired = _gamesSplit.ClientSize.Width - _gamesSplit.Panel2MinSize;
+        if (!TryClampSplitterDistance(_gamesSplit, desired, out var clamped))
         {
-            LogSplitterWarn(_gamesSplit.ClientSize.Width, _gamesSplit.Panel1MinSize, _gamesSplit.ClientSize.Width - _gamesSplit.Panel2MinSize, _gamesSplit.SplitterDistance, _gamesSplit.SplitterDistance);
             return;
         }
-
-        var desired = _gamesSplit.ClientSize.Width - _gamesSplit.Panel2MinSize;
-        var clamped = ClampSplitterDistance(_gamesSplit, desired);
         if (_gamesSplit.SplitterDistance != clamped)
         {
             try
@@ -1100,14 +1098,12 @@ public sealed class LeaderForm : Form
             return;
         }
 
-        if (_gamesSplit.ClientSize.Width <= 0)
+        var desired = _gamesSplit.SplitterDistance;
+        if (!TryClampSplitterDistance(_gamesSplit, desired, out var clamped))
         {
             return;
         }
-
-        var desired = _gamesSplit.SplitterDistance;
-        var clamped = ClampSplitterDistance(_gamesSplit, desired);
-        if (clamped != desired && _gamesSplit.ClientSize.Width > 0)
+        if (clamped != desired)
         {
             try
             {
