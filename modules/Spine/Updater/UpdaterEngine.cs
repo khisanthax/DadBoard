@@ -12,6 +12,8 @@ namespace DadBoard.Updater;
 
 sealed class UpdaterEngine
 {
+    private const int PackageDownloadTimeoutSeconds = 120;
+    private const int PackageDownloadMaxAttempts = 3;
     private readonly HttpClient _http;
 
     public UpdaterEngine()
@@ -240,11 +242,38 @@ sealed class UpdaterEngine
             return;
         }
 
-        using var response = await _http.GetAsync(packageUrl, ct).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
-        await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-        await using var file = File.Create(destination);
-        await stream.CopyToAsync(file, ct).ConfigureAwait(false);
+        Exception? lastError = null;
+        for (var attempt = 1; attempt <= PackageDownloadMaxAttempts; attempt++)
+        {
+            try
+            {
+                using var http = new HttpClient
+                {
+                    Timeout = TimeSpan.FromSeconds(PackageDownloadTimeoutSeconds)
+                };
+                using var response = await http.GetAsync(packageUrl, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+                response.EnsureSuccessStatusCode();
+                await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+                await using var file = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None);
+                await stream.CopyToAsync(file, ct).ConfigureAwait(false);
+                return;
+            }
+            catch (Exception ex) when (attempt < PackageDownloadMaxAttempts &&
+                                       ex is HttpRequestException or TaskCanceledException or IOException)
+            {
+                if (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+
+                lastError = ex;
+                var delaySeconds = 2 * attempt;
+                log($"Package download failed (attempt {attempt}/{PackageDownloadMaxAttempts}): {ex.Message}. Retrying in {delaySeconds}s...");
+                await Task.Delay(TimeSpan.FromSeconds(delaySeconds), ct).ConfigureAwait(false);
+            }
+        }
+
+        throw new IOException($"Package download failed after retries: {lastError?.Message}");
     }
 
     private static bool TryResolveLocalPath(string source, out string localPath)
