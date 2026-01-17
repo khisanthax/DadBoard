@@ -10,6 +10,7 @@ public static class ProtocolConstants
     public const string TypeAgentHello = "AgentHello";
     public const string TypeCommandLaunchGame = "Command.LaunchGame";
     public const string TypeCommandLaunchExe = "Command.LaunchExe";
+    public const string TypeCommandRestartSteam = "Command.RestartSteam";
     public const string TypeCommandShutdownApp = "Command.ShutdownApp";
     public const string TypeCommandScanSteamGames = "Command.ScanSteamGames";
     public const string TypeCommandUpdateSelf = "Command.UpdateSelf";
@@ -64,6 +65,11 @@ public sealed class LaunchGameCommand
 public sealed class LaunchExeCommand
 {
     public string? ExePath { get; set; }
+}
+
+public sealed class RestartSteamCommand
+{
+    public bool ForceLogin { get; set; } = true;
 }
 
 public sealed class ShutdownAppCommand

@@ -32,8 +32,10 @@ public sealed class LeaderForm : Form
     private readonly FlowLayoutPanel _targetPanel = new();
     private readonly Button _launchAllOnlineButton = new();
     private readonly Button _launchSelectedButton = new();
+    private readonly Button _restartSteamButton = new();
     private readonly Button _selectAllOnlineButton = new();
     private readonly Button _clearTargetsButton = new();
+    private readonly SplitContainer _gamesSplit = new();
 
     private readonly Button _launchOnSelectedAgentButton = new();
     private readonly Button _testButton = new();
@@ -138,9 +140,11 @@ public sealed class LeaderForm : Form
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
+        _service.LogGamesRefresh("UI handle created.");
         if (_deferredInventoryRefresh)
         {
             _deferredInventoryRefresh = false;
+            _service.LogGamesRefresh("UI handle created; starting deferred inventory refresh.");
             QueueGamesRefresh("deferred_inventory_refresh");
         }
     }
@@ -212,18 +216,28 @@ public sealed class LeaderForm : Form
 
     private Control BuildGamesTab()
     {
-        var split = new SplitContainer
+        const int launchMinWidth = 280;
+        const int listMinWidth = 400;
+
+        _gamesSplit.Dock = DockStyle.Fill;
+        _gamesSplit.Orientation = Orientation.Vertical;
+        _gamesSplit.SplitterWidth = 8;
+        _gamesSplit.IsSplitterFixed = false;
+        _gamesSplit.Panel2MinSize = launchMinWidth;
+        _gamesSplit.Panel1MinSize = listMinWidth;
+        _gamesSplit.SplitterDistance = 780;
+        _gamesSplit.Panel1.Padding = new Padding(8);
+        _gamesSplit.Panel2.Padding = new Padding(8);
+        _gamesSplit.Resize += (_, _) =>
         {
-            Dock = DockStyle.Fill,
-            Orientation = Orientation.Vertical,
-            SplitterWidth = 8,
-            IsSplitterFixed = false,
-            Panel2MinSize = 280,
-            Panel1MinSize = 400,
-            SplitterDistance = 780
+            var panelWidth = _gamesSplit.Panel2.Width;
+            if (panelWidth < launchMinWidth)
+            {
+                var desired = Math.Max(listMinWidth, _gamesSplit.Width - launchMinWidth - _gamesSplit.SplitterWidth);
+                _gamesSplit.SplitterDistance = desired;
+                _service.LogGamesRefresh($"Launch targets width too small ({panelWidth}px); enforcing minimum {launchMinWidth}px.");
+            }
         };
-        split.Panel1.Padding = new Padding(8);
-        split.Panel2.Padding = new Padding(8);
 
         var leftPanel = new TableLayoutPanel
         {
@@ -277,6 +291,11 @@ public sealed class LeaderForm : Form
         _launchSelectedButton.Enabled = false;
         _launchSelectedButton.Click += async (_, _) => await LaunchSelectedTargets();
 
+        _restartSteamButton.Text = "Restart Steam (Force Login)";
+        _restartSteamButton.Height = 32;
+        _restartSteamButton.Enabled = false;
+        _restartSteamButton.Click += async (_, _) => await RestartSteamTargets();
+
         actions.Controls.AddRange(new Control[]
         {
             _refreshGamesButton,
@@ -308,10 +327,9 @@ public sealed class LeaderForm : Form
             Dock = DockStyle.Fill,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            MinimumSize = new Size(0, 72),
+            MinimumSize = new Size(launchMinWidth, 72),
             Padding = new Padding(8)
         };
-        launchGroup.MinimumSize = new Size(280, 72);
 
         var launchLayout = new TableLayoutPanel
         {
@@ -347,6 +365,7 @@ public sealed class LeaderForm : Form
         {
             _launchAllOnlineButton,
             _launchSelectedButton,
+            _restartSteamButton,
             _selectAllOnlineButton,
             _clearTargetsButton
         });
@@ -360,9 +379,9 @@ public sealed class LeaderForm : Form
         leftPanel.Controls.Add(_filterSummaryLabel, 0, 2);
         leftPanel.Controls.Add(BuildGamesGrid(), 0, 3);
 
-        split.Panel1.Controls.Add(leftPanel);
-        split.Panel2.Controls.Add(launchGroup);
-        return split;
+        _gamesSplit.Panel1.Controls.Add(leftPanel);
+        _gamesSplit.Panel2.Controls.Add(launchGroup);
+        return _gamesSplit;
     }
     private Control BuildAgentsGrid()
     {
@@ -1028,6 +1047,65 @@ public sealed class LeaderForm : Form
         return (successes, failures);
     }
 
+    private async Task RestartSteamTargets()
+    {
+        var targets = GetCheckedTargetPcIds();
+        if (targets.Count == 0)
+        {
+            var onlineTargets = GetEligibleOnlineTargetPcIds();
+            if (onlineTargets.Count == 0)
+            {
+                MessageBox.Show("No eligible targets are online.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            var confirm = MessageBox.Show(
+                "No targets selected. Restart Steam on ALL eligible targets?",
+                "DadBoard",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question);
+            if (confirm != DialogResult.Yes)
+            {
+                return;
+            }
+
+            targets = onlineTargets;
+        }
+
+        _service.LogSteamRestartRequest(targets, selected: _selectedTargets.Count > 0);
+        _statusLabel.Text = $"Restarting Steam on {targets.Count} PC(s)...";
+
+        var (successes, failures) = await RestartSteamOnTargets(targets);
+        if (successes.Count == 0 && failures.Count > 0)
+        {
+            var message = $"Restart Steam failed:{Environment.NewLine}{string.Join(Environment.NewLine, failures)}";
+            _statusLabel.Text = message;
+            MessageBox.Show(message, "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        _statusLabel.Text = $"Restarting Steam on {successes.Count} PC(s)...";
+    }
+
+    private async Task<(List<string> Successes, List<string> Failures)> RestartSteamOnTargets(List<string> targets)
+    {
+        var failures = new List<string>();
+        var successes = new List<string>();
+        foreach (var pcId in targets)
+        {
+            var result = await _service.RestartSteamOnAgentAsync(pcId);
+            if (!result.Ok)
+            {
+                failures.Add($"{pcId}: {result.Error ?? "Unknown error"}");
+                continue;
+            }
+
+            successes.Add(pcId);
+        }
+
+        return (successes, failures);
+    }
+
     private void UpdateFilterSummary(List<AgentInfo> remoteAgents)
     {
         var checkedPcIds = _filterCheckboxes
@@ -1472,12 +1550,19 @@ public sealed class LeaderForm : Form
                 _toolTip.SetToolTip(label, lastError ?? "");
             }
 
-            if (!selectedAppId.HasValue)
+        if (!selectedAppId.HasValue)
+        {
+            checkbox.Checked = _selectedTargets.Contains(agent.PcId);
+            if (!agent.Online)
             {
-                checkbox.Checked = _selectedTargets.Contains(agent.PcId);
-                SetTargetEligibility(agent, checkbox, enabled: false, reason: "Select a game to enable targets.");
-                continue;
+                SetTargetEligibility(agent, checkbox, enabled: false, reason: "PC is offline.");
             }
+            else
+            {
+                SetTargetEligibility(agent, checkbox, enabled: true, reason: "Select a game to launch. Steam restart available.");
+            }
+            continue;
+        }
 
             if (inventoryErrors.TryGetValue(agent.PcId, out var error) &&
                 !string.IsNullOrWhiteSpace(error) &&
@@ -1583,8 +1668,12 @@ public sealed class LeaderForm : Form
             _launchSelectedButton.Enabled = false;
             _selectAllOnlineButton.Enabled = false;
             _clearTargetsButton.Enabled = _selectedTargets.Count > 0;
+            _restartSteamButton.Enabled = GetEligibleOnlineTargetPcIds().Count > 0 || GetCheckedTargetPcIds().Count > 0;
             _toolTip.SetToolTip(_launchAllOnlineButton, "Select a game to enable launch.");
             _toolTip.SetToolTip(_launchSelectedButton, "Select a game and at least one target PC.");
+            _toolTip.SetToolTip(_restartSteamButton, _restartSteamButton.Enabled
+                ? ""
+                : "Select targets to restart Steam.");
             reason = "disabled: no game selected";
             UpdateAgentActions();
             LogLaunchButtonState(reason);
@@ -1597,8 +1686,10 @@ public sealed class LeaderForm : Form
         _launchSelectedButton.Enabled = checkedTargets.Count > 0 && _pendingLaunchTargets == null;
         _selectAllOnlineButton.Enabled = _targetCheckboxes.Values.Any(cb => cb.Enabled);
         _clearTargetsButton.Enabled = _selectedTargets.Count > 0;
+        _restartSteamButton.Enabled = (onlineTargets.Count > 0 || checkedTargets.Count > 0) && _pendingLaunchTargets == null;
         _toolTip.SetToolTip(_launchAllOnlineButton, _launchAllOnlineButton.Enabled ? "" : "Select a game and at least one online target PC.");
         _toolTip.SetToolTip(_launchSelectedButton, _launchSelectedButton.Enabled ? "" : "Select a game and at least one target PC.");
+        _toolTip.SetToolTip(_restartSteamButton, _restartSteamButton.Enabled ? "" : "Select targets to restart Steam.");
         if (!_launchAllOnlineButton.Enabled && onlineTargets.Count == 0)
         {
             reason = "disabled: no online targets";
@@ -1816,6 +1907,9 @@ public sealed class LeaderForm : Form
             "sent" => "Running",
             "received" => "Running",
             "launching" => "Launching",
+            "steam_restart_starting" => "Restarting Steam",
+            "steam_restart_completed" => "Steam restarted",
+            "steam_restart_failed" => "Steam restart failed",
             "stopping" => "Running",
             _ => "Idle"
         };

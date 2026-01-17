@@ -300,6 +300,24 @@ public sealed class AgentService : IDisposable
             return;
         }
 
+        if (envelope.Type == ProtocolConstants.TypeCommandRestartSteam)
+        {
+            var command = envelope.Payload.Deserialize<RestartSteamCommand>(JsonUtil.Options);
+            if (command == null)
+            {
+                SendAck(socket, envelope.CorrelationId, ok: false, "Invalid payload");
+                return;
+            }
+
+            _logger.Info($"Received RestartSteam corr={envelope.CorrelationId} forceLogin={command.ForceLogin}");
+            _state.LastCommandId = envelope.CorrelationId;
+            _state.LastCommandType = envelope.Type;
+            _state.LastCommandTs = DateTime.UtcNow.ToString("O");
+
+            _ = Task.Run(() => ExecuteRestartSteam(envelope.CorrelationId, command, socket));
+            return;
+        }
+
         if (envelope.Type == ProtocolConstants.TypeCommandScanSteamGames)
         {
             _state.LastCommandId = envelope.CorrelationId;
@@ -556,6 +574,109 @@ public sealed class AgentService : IDisposable
             SendStatus(correlationId, "failed", null, message, "launch_failed");
             _logger.Error($"LaunchExe failed corr={correlationId}: {ex.Message}");
         }
+    }
+
+    private async Task ExecuteRestartSteam(string correlationId, RestartSteamCommand command, WebSocket socket)
+    {
+        SendStatus(correlationId, "steam_restart_starting", null, "Restarting Steam.");
+        SendAck(socket, correlationId, ok: true, null);
+
+        try
+        {
+            TryLaunchSteamExit();
+            await Task.Delay(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+
+            var killed = KillSteamProcesses();
+            _logger.Info($"RestartSteam killedProcesses={killed}");
+
+            var steamExe = ResolveSteamExe();
+            if (string.IsNullOrWhiteSpace(steamExe) || !File.Exists(steamExe))
+            {
+                SendStatus(correlationId, "steam_restart_failed", null, "Steam.exe not found.", "file_not_found");
+                return;
+            }
+
+            Process.Start(new ProcessStartInfo(steamExe)
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(steamExe) ?? ""
+            });
+
+            SendStatus(correlationId, "steam_restart_completed", null, "Steam restarted.");
+            _logger.Info($"RestartSteam completed corr={correlationId} exe={steamExe}");
+        }
+        catch (Exception ex)
+        {
+            SendStatus(correlationId, "steam_restart_failed", null, ex.Message, "restart_failed");
+            _logger.Error($"RestartSteam failed corr={correlationId}: {ex.Message}");
+        }
+    }
+
+    private static void TryLaunchSteamExit()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo("steam://exit") { UseShellExecute = true });
+        }
+        catch
+        {
+        }
+    }
+
+    private int KillSteamProcesses()
+    {
+        var names = new[] { "steam", "steamwebhelper", "steamservice" };
+        var killed = 0;
+
+        foreach (var name in names)
+        {
+            foreach (var process in Process.GetProcessesByName(name))
+            {
+                try
+                {
+                    if (!process.HasExited)
+                    {
+                        process.CloseMainWindow();
+                    }
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        Thread.Sleep(1000);
+
+        foreach (var name in names)
+        {
+            foreach (var process in Process.GetProcessesByName(name))
+            {
+                try
+                {
+                    if (!process.HasExited)
+                    {
+                        process.Kill(true);
+                        killed++;
+                    }
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        return killed;
+    }
+
+    private static string? ResolveSteamExe()
+    {
+        var steamPath = SteamLibraryScanner.GetSteamPath();
+        if (string.IsNullOrWhiteSpace(steamPath))
+        {
+            return null;
+        }
+
+        return Path.Combine(steamPath, "steam.exe");
     }
 
     private async Task CheckForUpdatesAsync(bool force, string? manifestOverride)

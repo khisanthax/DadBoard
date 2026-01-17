@@ -99,6 +99,11 @@ public static class SteamLibraryScanner
         };
     }
 
+    public static string? GetSteamPath()
+    {
+        return FindSteamPath();
+    }
+
     private static string? FindSteamPath()
     {
         if (!OperatingSystem.IsWindows())
