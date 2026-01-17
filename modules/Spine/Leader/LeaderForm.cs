@@ -67,6 +67,8 @@ public sealed class LeaderForm : Form
     private bool _lastLaunchAllEnabled;
     private bool _lastLaunchSelectedEnabled;
     private string _lastLaunchReason = "";
+    private bool _isRefreshingGames;
+    private bool _deferredInventoryRefresh;
 
     public LeaderForm(LeaderService service)
     {
@@ -126,23 +128,21 @@ public sealed class LeaderForm : Form
 
         _service.InventoriesUpdated += () =>
         {
-            if (IsDisposed || Disposing)
-            {
-                return;
-            }
-
-            BeginInvoke(new Action(() =>
-            {
-                _gamesDirty = true;
-                if (_tabs.SelectedTab == _gamesTab)
-                {
-                    RefreshGamesGridSafe();
-                }
-            }));
+            QueueGamesRefresh("inventory_updated");
         };
 
         FormClosing += OnFormClosing;
         FormClosed += OnFormClosed;
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        if (_deferredInventoryRefresh)
+        {
+            _deferredInventoryRefresh = false;
+            QueueGamesRefresh("deferred_inventory_refresh");
+        }
     }
 
     private Control BuildAgentsTab()
@@ -420,6 +420,11 @@ public sealed class LeaderForm : Form
         _gamesGrid.MultiSelect = false;
         _gamesGrid.SelectionChanged += (_, _) =>
         {
+            if (_isRefreshingGames)
+            {
+                return;
+            }
+
             LogGameSelectionIfChanged();
             UpdateTargetControlsForSelection();
             UpdateGameActions();
@@ -561,8 +566,10 @@ public sealed class LeaderForm : Form
 
         try
         {
+            _isRefreshingGames = true;
             // Games tab targets + availability filtering are driven by LeaderForm using LeaderService snapshots.
-            var selectedAppId = GetSelectedGameAppId();
+            var selectedAppId = _lastSelectedGameAppId ?? GetSelectedGameAppId();
+            _service.LogGamesRefresh($"Games refresh begin selectedAppId={(selectedAppId?.ToString() ?? "-")}");
 
             var leaderCatalog = _service.GetLeaderCatalog();
             var agentInventories = _service.GetAgentInventoriesSnapshot();
@@ -627,6 +634,7 @@ public sealed class LeaderForm : Form
             }
 
             _gamesGrid.ClearSelection();
+            var selectionRestored = false;
             if (selectedAppId.HasValue)
             {
                 foreach (DataGridViewRow row in _gamesGrid.Rows)
@@ -634,24 +642,41 @@ public sealed class LeaderForm : Form
                     if (row.Cells["appId"].Value is int appId && appId == selectedAppId.Value)
                     {
                         row.Selected = true;
+                        selectionRestored = true;
                         break;
                     }
                 }
             }
-            else if (_gamesGrid.Rows.Count > 0)
+            if (!selectionRestored && !selectedAppId.HasValue && _gamesGrid.Rows.Count > 0)
             {
                 _gamesGrid.Rows[0].Selected = true;
+            }
+            else if (!selectionRestored && selectedAppId.HasValue)
+            {
+                _lastSelectedGameAppId = null;
+                _service.LogGamesRefresh($"Game selection cleared (missing after refresh) appId={selectedAppId.Value}");
+            }
+            else if (selectionRestored && selectedAppId.HasValue)
+            {
+                _lastSelectedGameAppId = selectedAppId.Value;
             }
 
             UpdateTargetControls(targetAgents, inventorySets, inventoryErrors);
             _gamesDirty = false;
             UpdateGameActions();
             _service.LogGamesUiState(filtered.Count, _selectedTargets.Count, targetAgents.Count);
+            var selectedAfter = GetSelectedGameAppId();
+            LogRefreshSelectionState(selectedAppId, selectedAfter);
+            _service.LogGamesRefresh($"Games refresh end selectedAppId={(selectedAfter?.ToString() ?? "-")}");
         }
         catch (Exception ex)
         {
             Debug.WriteLine($"Games grid refresh failed: {ex}");
             _statusLabel.Text = $"Games refresh error: {ex.Message}";
+        }
+        finally
+        {
+            _isRefreshingGames = false;
         }
     }
 
@@ -930,6 +955,45 @@ public sealed class LeaderForm : Form
             _service.LogGameSelection(selection.Value.AppId, selection.Value.Name);
             _statusLabel.Text = $"Selected game: {selection.Value.Name}";
         }
+        else
+        {
+            _service.LogGamesRefresh("Game selection cleared by user or dataset.");
+        }
+    }
+
+    private void LogRefreshSelectionState(int? before, int? after)
+    {
+        var beforeText = before?.ToString() ?? "-";
+        var afterText = after?.ToString() ?? "-";
+        _service.LogGamesRefresh($"Games refresh selection before={beforeText} after={afterText}");
+    }
+
+    private void QueueGamesRefresh(string reason)
+    {
+        if (IsDisposed || Disposing)
+        {
+            return;
+        }
+
+        if (!IsHandleCreated)
+        {
+            _deferredInventoryRefresh = true;
+            _service.LogGamesRefresh($"Deferred games refresh (handle not created) reason={reason}");
+            return;
+        }
+
+        BeginInvoke(new Action(() =>
+        {
+            _gamesDirty = true;
+            if (_tabs.SelectedTab == _gamesTab)
+            {
+                RefreshGamesGridSafe();
+            }
+            else
+            {
+                _service.LogGamesRefresh($"Games refresh queued (tab inactive) reason={reason}");
+            }
+        }));
     }
 
     private void LogTargetSelection()

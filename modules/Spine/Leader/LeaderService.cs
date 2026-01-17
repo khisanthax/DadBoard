@@ -1297,6 +1297,11 @@ public sealed class LeaderService : IDisposable
         _logger.Info($"Games UI state games={gamesCount} selectedTargets={selectedTargets} targets={targetCount}");
     }
 
+    public void LogGamesRefresh(string message)
+    {
+        _logger.Info(message);
+    }
+
     public void LogLaunchButtonsState(bool allOnlineEnabled, bool selectedEnabled, string reason)
     {
         _logger.Info($"Launch buttons state allOnline={allOnlineEnabled} selected={selectedEnabled} reason={reason}");
