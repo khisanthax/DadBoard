@@ -212,17 +212,18 @@ public sealed class LeaderForm : Form
 
     private Control BuildGamesTab()
     {
-        var panel = new TableLayoutPanel
+        var split = new SplitContainer
         {
             Dock = DockStyle.Fill,
-            ColumnCount = 2,
-            RowCount = 1,
-            AutoScroll = true,
-            Padding = new Padding(8),
-            GrowStyle = TableLayoutPanelGrowStyle.FixedSize
+            Orientation = Orientation.Vertical,
+            SplitterWidth = 8,
+            IsSplitterFixed = false,
+            Panel2MinSize = 280,
+            Panel1MinSize = 400,
+            SplitterDistance = 780
         };
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        split.Panel1.Padding = new Padding(8);
+        split.Panel2.Padding = new Padding(8);
 
         var leftPanel = new TableLayoutPanel
         {
@@ -304,13 +305,13 @@ public sealed class LeaderForm : Form
         var launchGroup = new GroupBox
         {
             Text = "Launch targets",
-            Dock = DockStyle.Top,
+            Dock = DockStyle.Fill,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             MinimumSize = new Size(0, 72),
-            Padding = new Padding(8),
-            Anchor = AnchorStyles.Top | AnchorStyles.Right
+            Padding = new Padding(8)
         };
+        launchGroup.MinimumSize = new Size(280, 72);
 
         var launchLayout = new TableLayoutPanel
         {
@@ -359,10 +360,9 @@ public sealed class LeaderForm : Form
         leftPanel.Controls.Add(_filterSummaryLabel, 0, 2);
         leftPanel.Controls.Add(BuildGamesGrid(), 0, 3);
 
-        panel.Controls.Add(leftPanel, 0, 0);
-        panel.Controls.Add(launchGroup, 1, 0);
-        panel.SetColumnSpan(launchGroup, 1);
-        return panel;
+        split.Panel1.Controls.Add(leftPanel);
+        split.Panel2.Controls.Add(launchGroup);
+        return split;
     }
     private Control BuildAgentsGrid()
     {
