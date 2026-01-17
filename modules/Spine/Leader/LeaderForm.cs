@@ -1041,7 +1041,10 @@ public sealed class LeaderForm : Form
         {
             _gamesTab.Controls.Clear();
             _gamesTab.Controls.Add(BuildGamesTab());
-            ApplyGamesSplitter();
+            if (IsHandleCreated)
+            {
+                BeginInvoke(new Action(ApplyGamesSplitter));
+            }
         };
 
         panel.Controls.Add(label, 0, 0);
@@ -1068,52 +1071,66 @@ public sealed class LeaderForm : Form
 
     private void ApplyGamesSplitter()
     {
-        if (_gamesSplit.IsDisposed)
+        if (_gamesSplit.IsDisposed || !_gamesSplit.IsHandleCreated)
         {
             return;
         }
 
-        var desired = _gamesSplit.ClientSize.Width - _gamesSplit.Panel2MinSize;
-        if (!TryClampSplitterDistance(_gamesSplit, desired, out var clamped))
+        try
         {
-            return;
+            var desired = _gamesSplit.ClientSize.Width - _gamesSplit.Panel2MinSize;
+            if (!TryClampSplitterDistance(_gamesSplit, desired, out var clamped))
+            {
+                return;
+            }
+            if (_gamesSplit.SplitterDistance != clamped)
+            {
+                try
+                {
+                    _gamesSplit.SplitterDistance = clamped;
+                }
+                catch (InvalidOperationException ex)
+                {
+                    _service.LogGamesRefresh($"ApplyGamesSplitter skipped: {ex.Message}");
+                }
+            }
         }
-        if (_gamesSplit.SplitterDistance != clamped)
+        catch (Exception ex)
         {
-            try
-            {
-                _gamesSplit.SplitterDistance = clamped;
-            }
-            catch (Exception ex)
-            {
-                _service.LogGamesRefresh($"ApplyGamesSplitter failed: {ex.Message}");
-            }
+            _service.LogGamesRefresh($"ApplyGamesSplitter failed: {ex.Message}");
         }
     }
 
     private void EnsureSplitterValid()
     {
-        if (_gamesSplit.IsDisposed)
+        if (_gamesSplit.IsDisposed || !_gamesSplit.IsHandleCreated)
         {
             return;
         }
 
-        var desired = _gamesSplit.SplitterDistance;
-        if (!TryClampSplitterDistance(_gamesSplit, desired, out var clamped))
+        try
         {
-            return;
+            var desired = _gamesSplit.SplitterDistance;
+            if (!TryClampSplitterDistance(_gamesSplit, desired, out var clamped))
+            {
+                return;
+            }
+            if (clamped != desired)
+            {
+                try
+                {
+                    _gamesSplit.SplitterDistance = clamped;
+                    _service.LogGamesRefresh($"SplitContainer distance corrected to {clamped}.");
+                }
+                catch (InvalidOperationException ex)
+                {
+                    _service.LogGamesRefresh($"EnsureSplitterValid skipped: {ex.Message}");
+                }
+            }
         }
-        if (clamped != desired)
+        catch (Exception ex)
         {
-            try
-            {
-                _gamesSplit.SplitterDistance = clamped;
-                _service.LogGamesRefresh($"SplitContainer distance corrected to {clamped}.");
-            }
-            catch (Exception ex)
-            {
-                _service.LogGamesRefresh($"EnsureSplitterValid failed: {ex.Message}");
-            }
+            _service.LogGamesRefresh($"EnsureSplitterValid failed: {ex.Message}");
         }
     }
 
