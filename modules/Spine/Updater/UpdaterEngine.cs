@@ -12,7 +12,8 @@ namespace DadBoard.Updater;
 
 sealed class UpdaterEngine
 {
-    private const int PackageDownloadTimeoutSeconds = 120;
+    private const int PackageDownloadOverallTimeoutMinutes = 20;
+    private const int PackageDownloadStallTimeoutSeconds = 90;
     private const int PackageDownloadMaxAttempts = 3;
     private readonly HttpClient _http;
 
@@ -249,13 +250,15 @@ sealed class UpdaterEngine
             {
                 using var http = new HttpClient
                 {
-                    Timeout = TimeSpan.FromSeconds(PackageDownloadTimeoutSeconds)
+                    Timeout = Timeout.InfiniteTimeSpan
                 };
-                using var response = await http.GetAsync(packageUrl, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+                using var overallCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                overallCts.CancelAfter(TimeSpan.FromMinutes(PackageDownloadOverallTimeoutMinutes));
+                using var response = await http.GetAsync(packageUrl, HttpCompletionOption.ResponseHeadersRead, overallCts.Token).ConfigureAwait(false);
                 response.EnsureSuccessStatusCode();
-                await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+                await using var stream = await response.Content.ReadAsStreamAsync(overallCts.Token).ConfigureAwait(false);
                 await using var file = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None);
-                await stream.CopyToAsync(file, ct).ConfigureAwait(false);
+                await CopyWithStallTimeoutAsync(stream, file, overallCts.Token, log).ConfigureAwait(false);
                 return;
             }
             catch (Exception ex) when (attempt < PackageDownloadMaxAttempts &&
@@ -274,6 +277,34 @@ sealed class UpdaterEngine
         }
 
         throw new IOException($"Package download failed after retries: {lastError?.Message}");
+    }
+
+    private static async Task CopyWithStallTimeoutAsync(Stream source, Stream destination, CancellationToken ct, Action<string> log)
+    {
+        var buffer = new byte[1024 * 64];
+        var stallTimeout = TimeSpan.FromSeconds(PackageDownloadStallTimeoutSeconds);
+
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                using var stallCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                stallCts.CancelAfter(stallTimeout);
+                var read = await source.ReadAsync(buffer.AsMemory(0, buffer.Length), stallCts.Token).ConfigureAwait(false);
+                if (read == 0)
+                {
+                    return;
+                }
+
+                await destination.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                log($"Package download stalled for {PackageDownloadStallTimeoutSeconds}s.");
+                throw new TimeoutException($"Package download stalled for {PackageDownloadStallTimeoutSeconds}s.");
+            }
+        }
     }
 
     private static bool TryResolveLocalPath(string source, out string localPath)
