@@ -83,10 +83,19 @@ public sealed class LeaderForm : Form
     private string _lastLaunchReason = "";
     private bool _isRefreshingGames;
     private bool _deferredInventoryRefresh;
+    private bool _loggedCtorStart;
+    private bool _loggedCtorEnd;
+    private bool _loggedLoad;
+    private bool _loggedShown;
+    private bool _loggedHandle;
+    private bool _loggedFirstLayout;
+    private bool _loggedFirstSize;
+    private bool _loggedSplitterApplySkip;
 
     public LeaderForm(LeaderService service)
     {
         _service = service;
+        LogLayoutState("LeaderForm.ctor.start");
         Text = "DadBoard Leader (Phase 3)";
         Size = new Size(1120, 640);
         MinimumSize = new Size(GamesMinWindowWidth, GamesMinWindowHeight);
@@ -135,9 +144,38 @@ public sealed class LeaderForm : Form
             EnsureSplitterValid();
         };
 
+        Load += (_, _) =>
+        {
+            if (!_loggedLoad)
+            {
+                _loggedLoad = true;
+                LogLayoutState("LeaderForm.Load");
+            }
+        };
+        Layout += (_, _) =>
+        {
+            if (!_loggedFirstLayout)
+            {
+                _loggedFirstLayout = true;
+                LogLayoutState("LeaderForm.Layout.first");
+            }
+        };
+        SizeChanged += (_, _) =>
+        {
+            if (!_loggedFirstSize)
+            {
+                _loggedFirstSize = true;
+                LogLayoutState("LeaderForm.SizeChanged.first");
+            }
+        };
         Shown += (_, _) =>
         {
             StartRefresh();
+            if (!_loggedShown)
+            {
+                _loggedShown = true;
+                LogLayoutState("LeaderForm.Shown");
+            }
             BeginInvoke(new Action(ApplyGamesSplitter));
         };
         VisibleChanged += (_, _) =>
@@ -159,11 +197,17 @@ public sealed class LeaderForm : Form
 
         FormClosing += OnFormClosing;
         FormClosed += OnFormClosed;
+        LogLayoutState("LeaderForm.ctor.end");
     }
 
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
+        if (!_loggedHandle)
+        {
+            _loggedHandle = true;
+            LogLayoutState("LeaderForm.HandleCreated");
+        }
         _service.LogGamesRefresh("UI handle created.");
         if (_deferredInventoryRefresh)
         {
@@ -249,6 +293,7 @@ public sealed class LeaderForm : Form
     {
         try
         {
+            LogLayoutState("BuildGamesTab.start");
             _gamesSplit.Dock = DockStyle.Fill;
             _gamesSplit.Orientation = Orientation.Vertical;
             _gamesSplit.SplitterWidth = GamesSplitterWidth;
@@ -402,11 +447,12 @@ public sealed class LeaderForm : Form
 
             _gamesSplit.Panel1.Controls.Add(leftPanel);
             _gamesSplit.Panel2.Controls.Add(launchGroup);
+            LogLayoutState("BuildGamesTab.end", _gamesSplit);
             return _gamesSplit;
         }
         catch (Exception ex)
         {
-            _service.LogGamesRefresh($"BuildGamesTab failed: {ex.Message}");
+            _service.LogGamesRefresh($"BuildGamesTab failed: {ex}");
             return BuildGamesFallback(ex.Message);
         }
     }
@@ -1069,6 +1115,25 @@ public sealed class LeaderForm : Form
         return true;
     }
 
+    private bool CanApplySplitterDistance(SplitContainer sc, int value, string reason)
+    {
+        var width = sc.ClientSize.Width;
+        var min = sc.Panel1MinSize;
+        var max = width - sc.Panel2MinSize;
+        if (width <= 0 || max <= min || value < min || value > max)
+        {
+            if (!_loggedSplitterApplySkip || (DateTime.UtcNow - _lastSplitterWarn).TotalSeconds >= 5)
+            {
+                _loggedSplitterApplySkip = true;
+                _service.LogGamesRefresh(
+                    $"SplitContainer apply skipped reason={reason} width={width} min={min} max={max} value={value}");
+            }
+            return false;
+        }
+
+        return true;
+    }
+
     private void ApplyGamesSplitter()
     {
         if (_gamesSplit.IsDisposed || !_gamesSplit.IsHandleCreated)
@@ -1079,6 +1144,7 @@ public sealed class LeaderForm : Form
         try
         {
             var desired = _gamesSplit.ClientSize.Width - _gamesSplit.Panel2MinSize;
+            LogLayoutState("ApplyGamesSplitter.before", _gamesSplit, desired);
             if (!TryClampSplitterDistance(_gamesSplit, desired, out var clamped))
             {
                 return;
@@ -1087,7 +1153,11 @@ public sealed class LeaderForm : Form
             {
                 try
                 {
-                    _gamesSplit.SplitterDistance = clamped;
+                    LogLayoutState("ApplyGamesSplitter.set", _gamesSplit, clamped);
+                    if (CanApplySplitterDistance(_gamesSplit, clamped, "apply"))
+                    {
+                        _gamesSplit.SplitterDistance = clamped;
+                    }
                 }
                 catch (InvalidOperationException ex)
                 {
@@ -1111,6 +1181,7 @@ public sealed class LeaderForm : Form
         try
         {
             var desired = _gamesSplit.SplitterDistance;
+            LogLayoutState("EnsureSplitterValid.before", _gamesSplit, desired);
             if (!TryClampSplitterDistance(_gamesSplit, desired, out var clamped))
             {
                 return;
@@ -1119,8 +1190,12 @@ public sealed class LeaderForm : Form
             {
                 try
                 {
-                    _gamesSplit.SplitterDistance = clamped;
-                    _service.LogGamesRefresh($"SplitContainer distance corrected to {clamped}.");
+                    LogLayoutState("EnsureSplitterValid.set", _gamesSplit, clamped);
+                    if (CanApplySplitterDistance(_gamesSplit, clamped, "ensure"))
+                    {
+                        _gamesSplit.SplitterDistance = clamped;
+                        _service.LogGamesRefresh($"SplitContainer distance corrected to {clamped}.");
+                    }
                 }
                 catch (InvalidOperationException ex)
                 {
@@ -1171,6 +1246,55 @@ public sealed class LeaderForm : Form
 
         _lastSplitterInfo = DateTime.UtcNow;
         _service.LogGamesRefresh($"SplitContainer width={width} desired={desired} min={min} max={max} clamped={clamped}");
+    }
+
+    private void LogLayoutState(string tag, SplitContainer? split = null, int? desired = null)
+    {
+        if (IsDisposed || Disposing)
+        {
+            return;
+        }
+
+        try
+        {
+            var formClient = ClientSize;
+            var formSize = Size;
+            var handle = IsHandleCreated ? "created" : "not_created";
+            var dpi = TryGetDpi();
+            if (split == null)
+            {
+                _service.LogGamesRefresh(
+                    $"{tag} formSize={formSize.Width}x{formSize.Height} client={formClient.Width}x{formClient.Height} handle={handle} dpi={dpi}");
+                return;
+            }
+
+            var scClient = split.ClientSize;
+            var scSize = split.Size;
+            var parentClient = split.Parent?.ClientSize ?? Size.Empty;
+            _service.LogGamesRefresh(
+                $"{tag} formClient={formClient.Width}x{formClient.Height} handle={handle} dpi={dpi} " +
+                $"scSize={scSize.Width}x{scSize.Height} scClient={scClient.Width}x{scClient.Height} " +
+                $"p1Min={split.Panel1MinSize} p2Min={split.Panel2MinSize} " +
+                $"splitter={split.SplitterDistance} desired={(desired?.ToString() ?? "-")} " +
+                $"parentClient={parentClient.Width}x{parentClient.Height}");
+        }
+        catch (Exception ex)
+        {
+            _service.LogGamesRefresh($"{tag} log failed: {ex.Message}");
+        }
+    }
+
+    private string TryGetDpi()
+    {
+        try
+        {
+            using var g = CreateGraphics();
+            return $"{g.DpiX:0.##}x{g.DpiY:0.##}";
+        }
+        catch
+        {
+            return "unknown";
+        }
     }
 
     private void QueueGamesRefresh(string reason)
