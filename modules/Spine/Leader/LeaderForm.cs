@@ -17,6 +17,7 @@ public sealed class LeaderForm : Form
     private const int LaunchTargetsMinWidth = 280;
     private const int LaunchTargetsPreferredWidth = 320;
     private const int GamesSplitterWidth = 8;
+    private const int GamesSplitterSafety = 12;
     private const int GamesPanel1MinDefault = 250;
     private const int GamesPanel2MinDefault = 220;
     private const int GamesMinWindowWidth = GamesListMinWidth + LaunchTargetsMinWidth + GamesSplitterWidth + 32;
@@ -282,8 +283,8 @@ public sealed class LeaderForm : Form
         _gamesSplit.Orientation = Orientation.Vertical;
         _gamesSplit.SplitterWidth = GamesSplitterWidth;
         _gamesSplit.IsSplitterFixed = false;
-        _gamesSplit.Panel2MinSize = GamesPanel2MinDefault;
-        _gamesSplit.Panel1MinSize = GamesPanel1MinDefault;
+        _gamesSplit.Panel2MinSize = 0;
+        _gamesSplit.Panel1MinSize = 0;
         _gamesSplit.Panel1.Padding = new Padding(8);
         _gamesSplit.Panel2.Padding = new Padding(8);
         _gamesSplit.Panel2.AutoScroll = true;
@@ -1138,18 +1139,31 @@ public sealed class LeaderForm : Form
                 return;
             }
 
-            var minAllowed = _gamesSplit.Panel1MinSize;
-            var maxAllowed = width - _gamesSplit.Panel2MinSize;
+            var panel1Min = GamesPanel1MinDefault;
+            var panel2Min = GamesPanel2MinDefault;
+            if (width < panel1Min + panel2Min + GamesSplitterSafety)
+            {
+                panel1Min = Math.Max(120, width - panel2Min - GamesSplitterSafety);
+                if (width < panel1Min + panel2Min + GamesSplitterSafety)
+                {
+                    panel2Min = Math.Max(120, width - panel1Min - GamesSplitterSafety);
+                }
+                _service.LogGamesRefresh(
+                    $"GamesSplit mins relaxed reason={reason} width={width} panel1Min={panel1Min} panel2Min={panel2Min}");
+            }
+
+            var minAllowed = panel1Min;
+            var maxAllowed = width - panel2Min;
             if (maxAllowed < minAllowed)
             {
-                LogSplitterAttempt(reason, width, height, _gamesSplit.Panel1MinSize, _gamesSplit.Panel2MinSize, minAllowed, maxAllowed, desired, null, "skip_invalid_range");
+                LogSplitterAttempt(reason, width, height, panel1Min, panel2Min, minAllowed, maxAllowed, desired, null, "skip_invalid_range");
                 return;
             }
 
             var desiredDistance = desired ?? Math.Min(Math.Max(width - LaunchTargetsPreferredWidth, minAllowed), maxAllowed);
             var clamped = Math.Min(Math.Max(desiredDistance, minAllowed), maxAllowed);
             var status = clamped != desiredDistance ? "clamped" : "ok";
-            LogSplitterAttempt(reason, width, height, _gamesSplit.Panel1MinSize, _gamesSplit.Panel2MinSize, minAllowed, maxAllowed, desiredDistance, clamped, status);
+            LogSplitterAttempt(reason, width, height, panel1Min, panel2Min, minAllowed, maxAllowed, desiredDistance, clamped, status);
 
             if (_gamesSplit.SplitterDistance != clamped)
             {
@@ -1162,6 +1176,15 @@ public sealed class LeaderForm : Form
                     _service.LogGamesRefresh(
                         $"SafeSetSplitterDistance failed reason={reason} desired={desiredDistance} clamped={clamped} error={ex.Message}");
                 }
+            }
+
+            if (_gamesSplit.Panel1MinSize != panel1Min)
+            {
+                _gamesSplit.Panel1MinSize = panel1Min;
+            }
+            if (_gamesSplit.Panel2MinSize != panel2Min)
+            {
+                _gamesSplit.Panel2MinSize = panel2Min;
             }
         }
         catch (Exception ex)
