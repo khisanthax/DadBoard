@@ -331,7 +331,7 @@ public sealed class LeaderForm : Form
         _requireAllToggle.Checked = true;
         _requireAllToggle.Visible = false;
 
-        _launchAllOnlineButton.Text = "Launch All Online";
+        _launchAllOnlineButton.Text = "Launch All";
         _launchAllOnlineButton.Height = 32;
         _launchAllOnlineButton.Enabled = false;
         _launchAllOnlineButton.Click += async (_, _) => await LaunchAllOnlineTargets();
@@ -341,7 +341,7 @@ public sealed class LeaderForm : Form
         _launchSelectedButton.Enabled = false;
         _launchSelectedButton.Click += async (_, _) => await LaunchSelectedTargets();
 
-        _restartSteamButton.Text = "Restart Steam (Force Login)";
+        _restartSteamButton.Text = "Restart Steam";
         _restartSteamButton.Height = 32;
         _restartSteamButton.Enabled = false;
         _restartSteamButton.Click += async (_, _) => await RestartSteamTargets();
@@ -700,7 +700,7 @@ public sealed class LeaderForm : Form
                     else
                     {
                         cell.Value = "No";
-                        cell.Style.ForeColor = SystemColors.GrayText;
+                        cell.Style.ForeColor = Color.DimGray;
                         cell.Style.BackColor = SystemColors.Control;
                         cell.ToolTipText = "Not installed";
                     }
