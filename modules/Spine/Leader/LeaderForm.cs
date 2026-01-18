@@ -15,7 +15,9 @@ public sealed class LeaderForm : Form
 {
     private const int GamesListMinWidth = 400;
     private const int LaunchTargetsMinWidth = 280;
+    private const int LaunchTargetsPreferredWidth = 320;
     private const int GamesSplitterWidth = 8;
+    private const int GamesSplitterSafety = 12;
     private const int GamesMinWindowWidth = GamesListMinWidth + LaunchTargetsMinWidth + GamesSplitterWidth + 32;
     private const int GamesMinWindowHeight = 520;
 
@@ -44,7 +46,6 @@ public sealed class LeaderForm : Form
     private readonly SplitContainer _gamesSplit = new();
     private readonly System.Windows.Forms.Timer _splitterDebounceTimer = new();
     private DateTime _lastSplitterWarn = DateTime.MinValue;
-    private DateTime _lastSplitterInfo = DateTime.MinValue;
     private int _lastSplitterWarnWidth = -1;
     private int _lastSplitterWarnMin = -1;
     private int _lastSplitterWarnMax = -1;
@@ -83,14 +84,14 @@ public sealed class LeaderForm : Form
     private string _lastLaunchReason = "";
     private bool _isRefreshingGames;
     private bool _deferredInventoryRefresh;
-    private bool _loggedCtorStart;
-    private bool _loggedCtorEnd;
     private bool _loggedLoad;
     private bool _loggedShown;
     private bool _loggedHandle;
     private bool _loggedFirstLayout;
     private bool _loggedFirstSize;
     private bool _loggedSplitterApplySkip;
+    private bool _gamesSplitInitialized;
+    private bool _applyingGamesSplit;
 
     public LeaderForm(LeaderService service)
     {
@@ -176,7 +177,7 @@ public sealed class LeaderForm : Form
                 _loggedShown = true;
                 LogLayoutState("LeaderForm.Shown");
             }
-            BeginInvoke(new Action(ApplyGamesSplitter));
+            BeginInvoke(new Action(() => ApplyGamesSplitLayout("shown", force: true)));
         };
         VisibleChanged += (_, _) =>
         {
@@ -302,6 +303,7 @@ public sealed class LeaderForm : Form
             _gamesSplit.Panel1MinSize = GamesListMinWidth;
             _gamesSplit.Panel1.Padding = new Padding(8);
             _gamesSplit.Panel2.Padding = new Padding(8);
+            _gamesSplit.Panel2.AutoScroll = true;
             _gamesSplit.SizeChanged += (_, _) => StartSplitterDebounce();
             _gamesSplit.SplitterMoved += (_, _) => StartSplitterDebounce();
 
@@ -1089,30 +1091,13 @@ public sealed class LeaderForm : Form
             _gamesTab.Controls.Add(BuildGamesTab());
             if (IsHandleCreated)
             {
-                BeginInvoke(new Action(ApplyGamesSplitter));
+                BeginInvoke(new Action(() => ApplyGamesSplitLayout("retry", force: true)));
             }
         };
 
         panel.Controls.Add(label, 0, 0);
         panel.Controls.Add(retryButton, 0, 1);
         return panel;
-    }
-
-    private bool TryClampSplitterDistance(SplitContainer sc, int desired, out int clamped)
-    {
-        var width = sc.ClientSize.Width;
-        var min = sc.Panel1MinSize;
-        var max = width - sc.Panel2MinSize;
-        if (width <= 0 || max <= min)
-        {
-            LogSplitterWarn(width, min, max, desired, sc.SplitterDistance);
-            clamped = desired;
-            return false;
-        }
-
-        clamped = Math.Min(Math.Max(desired, min), max);
-        LogSplitterInfo(width, min, max, desired, clamped);
-        return true;
     }
 
     private bool CanApplySplitterDistance(SplitContainer sc, int value, string reason)
@@ -1134,40 +1119,79 @@ public sealed class LeaderForm : Form
         return true;
     }
 
-    private void ApplyGamesSplitter()
+    private void ApplyGamesSplitLayout(string reason, bool force)
     {
-        if (_gamesSplit.IsDisposed || !_gamesSplit.IsHandleCreated)
+        if (_applyingGamesSplit || _gamesSplit.IsDisposed || !_gamesSplit.IsHandleCreated)
         {
             return;
         }
 
+        _applyingGamesSplit = true;
         try
         {
-            var desired = _gamesSplit.ClientSize.Width - _gamesSplit.Panel2MinSize;
-            LogLayoutState("ApplyGamesSplitter.before", _gamesSplit, desired);
-            if (!TryClampSplitterDistance(_gamesSplit, desired, out var clamped))
+            var width = _gamesSplit.ClientSize.Width;
+            if (width <= 0)
             {
+                LogSplitterWarn(width, _gamesSplit.Panel1MinSize, width - _gamesSplit.Panel2MinSize, _gamesSplit.SplitterDistance, _gamesSplit.SplitterDistance);
                 return;
             }
-            if (_gamesSplit.SplitterDistance != clamped)
+
+            var panel1Min = GamesListMinWidth;
+            var panel2Min = LaunchTargetsMinWidth;
+            var minTotal = panel1Min + panel2Min + GamesSplitterSafety;
+            if (width < minTotal)
             {
-                try
+                panel1Min = Math.Max(120, width - panel2Min - GamesSplitterSafety);
+                minTotal = panel1Min + panel2Min + GamesSplitterSafety;
+                if (width < minTotal)
                 {
-                    LogLayoutState("ApplyGamesSplitter.set", _gamesSplit, clamped);
-                    if (CanApplySplitterDistance(_gamesSplit, clamped, "apply"))
-                    {
-                        _gamesSplit.SplitterDistance = clamped;
-                    }
+                    panel2Min = Math.Max(120, width - panel1Min - GamesSplitterSafety);
                 }
-                catch (InvalidOperationException ex)
+                _service.LogGamesRefresh(
+                    $"GamesSplit mins relaxed reason={reason} width={width} panel1Min={panel1Min} panel2Min={panel2Min}");
+            }
+
+            if (_gamesSplit.Panel1MinSize != panel1Min)
+            {
+                _gamesSplit.Panel1MinSize = panel1Min;
+            }
+            if (_gamesSplit.Panel2MinSize != panel2Min)
+            {
+                _gamesSplit.Panel2MinSize = panel2Min;
+            }
+
+            var min = _gamesSplit.Panel1MinSize;
+            var max = width - _gamesSplit.Panel2MinSize;
+            if (max <= min)
+            {
+                _service.LogGamesRefresh(
+                    $"GamesSplit apply skipped reason={reason} width={width} min={min} max={max} p1Min={_gamesSplit.Panel1MinSize} p2Min={_gamesSplit.Panel2MinSize}");
+                return;
+            }
+
+            var desiredPanel2 = Math.Min(Math.Max(LaunchTargetsPreferredWidth, _gamesSplit.Panel2MinSize), width - _gamesSplit.Panel1MinSize - GamesSplitterSafety);
+            var desired = width - desiredPanel2;
+            var clamped = Math.Min(Math.Max(desired, min), max);
+            LogLayoutState($"GamesSplit.apply.{reason}", _gamesSplit, clamped);
+
+            if (force || _gamesSplit.SplitterDistance < min || _gamesSplit.SplitterDistance > max)
+            {
+                if (CanApplySplitterDistance(_gamesSplit, clamped, reason))
                 {
-                    _service.LogGamesRefresh($"ApplyGamesSplitter skipped: {ex.Message}");
+                    _gamesSplit.SplitterDistance = clamped;
+                    _gamesSplitInitialized = true;
+                    _service.LogGamesRefresh(
+                        $"GamesSplit applied reason={reason} width={width} min={min} max={max} desired={desired} clamped={clamped}");
                 }
             }
         }
         catch (Exception ex)
         {
-            _service.LogGamesRefresh($"ApplyGamesSplitter failed: {ex.Message}");
+            _service.LogGamesRefresh($"ApplyGamesSplitLayout failed: {ex.Message}");
+        }
+        finally
+        {
+            _applyingGamesSplit = false;
         }
     }
 
@@ -1178,35 +1202,7 @@ public sealed class LeaderForm : Form
             return;
         }
 
-        try
-        {
-            var desired = _gamesSplit.SplitterDistance;
-            LogLayoutState("EnsureSplitterValid.before", _gamesSplit, desired);
-            if (!TryClampSplitterDistance(_gamesSplit, desired, out var clamped))
-            {
-                return;
-            }
-            if (clamped != desired)
-            {
-                try
-                {
-                    LogLayoutState("EnsureSplitterValid.set", _gamesSplit, clamped);
-                    if (CanApplySplitterDistance(_gamesSplit, clamped, "ensure"))
-                    {
-                        _gamesSplit.SplitterDistance = clamped;
-                        _service.LogGamesRefresh($"SplitContainer distance corrected to {clamped}.");
-                    }
-                }
-                catch (InvalidOperationException ex)
-                {
-                    _service.LogGamesRefresh($"EnsureSplitterValid skipped: {ex.Message}");
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _service.LogGamesRefresh($"EnsureSplitterValid failed: {ex.Message}");
-        }
+        ApplyGamesSplitLayout("size_changed", force: !_gamesSplitInitialized);
     }
 
     private void StartSplitterDebounce()
@@ -1235,17 +1231,6 @@ public sealed class LeaderForm : Form
         _lastSplitterWarnMin = min;
         _lastSplitterWarnMax = max;
         _service.LogGamesRefresh($"WARN SplitContainer invalid width={width} min={min} max={max} desired={desired} current={current}");
-    }
-
-    private void LogSplitterInfo(int width, int min, int max, int desired, int clamped)
-    {
-        if ((DateTime.UtcNow - _lastSplitterInfo).TotalSeconds < 5)
-        {
-            return;
-        }
-
-        _lastSplitterInfo = DateTime.UtcNow;
-        _service.LogGamesRefresh($"SplitContainer width={width} desired={desired} min={min} max={max} clamped={clamped}");
     }
 
     private void LogLayoutState(string tag, SplitContainer? split = null, int? desired = null)
