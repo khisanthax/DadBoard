@@ -480,7 +480,7 @@ public sealed class AgentService : IDisposable
         try
         {
             SendStatus(correlationId, "launching", command.GameId, "Launching game.");
-            var hasAppId = TryParseAppId(command.GameId, out var appId);
+            var hasAppId = TryGetAppId(command, out var appId);
             var installDir = hasAppId && SteamLibraryScanner.TryGetInstallDir(appId, out var foundDir)
                 ? foundDir
                 : null;
@@ -502,9 +502,14 @@ public sealed class AgentService : IDisposable
 
             if (hasAppId)
             {
+                _logger.Info($"LaunchGame tracking appId={appId} installDir={installDir ?? "none"}");
                 var resolvedPid = await ResolveGamePidAsync(appId, installDir, command.ProcessNames, beforeSnapshot, _cts.Token)
                     .ConfigureAwait(false);
                 RecordLaunchSession(appId, command.GameId, installDir, resolvedPid, command.LaunchUrl, command.ExePath);
+            }
+            else
+            {
+                _logger.Warn($"LaunchGame appId unresolved gameId={command.GameId ?? "none"} url={command.LaunchUrl ?? "none"}");
             }
 
             bool ready = await WaitForProcess(command.ProcessNames, command.ReadyTimeoutSec).ConfigureAwait(false);
@@ -543,9 +548,16 @@ public sealed class AgentService : IDisposable
         {
             if (!_launchSessions.TryGetValue(command.AppId, out var session) || session.RootPid is not int pid)
             {
-                SendStatus(correlationId, "quit_failed", command.AppId.ToString(),
-                    "No tracked launch session for this game on this PC.", "no_session");
-                return;
+                var fallbackPid = ResolveRunningPid(command.AppId);
+                if (!fallbackPid.HasValue)
+                {
+                    SendStatus(correlationId, "quit_failed", command.AppId.ToString(),
+                        "No tracked launch session for this game on this PC.", "no_session");
+                    return;
+                }
+
+                pid = fallbackPid.Value;
+                _logger.Warn($"QuitGame fallback pid resolved appId={command.AppId} pid={pid}");
             }
 
             Process? process = null;
@@ -723,6 +735,45 @@ public sealed class AgentService : IDisposable
         return int.TryParse(gameId, out appId);
     }
 
+    private static bool TryParseAppIdFromLaunchUrl(string? launchUrl, out int appId)
+    {
+        appId = 0;
+        if (string.IsNullOrWhiteSpace(launchUrl))
+        {
+            return false;
+        }
+
+        var marker = "steam://run/";
+        var index = launchUrl.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (index >= 0)
+        {
+            var tail = launchUrl[(index + marker.Length)..];
+            var digits = new string(tail.TakeWhile(char.IsDigit).ToArray());
+            return int.TryParse(digits, out appId);
+        }
+
+        marker = "steam://rungameid/";
+        index = launchUrl.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (index >= 0)
+        {
+            var tail = launchUrl[(index + marker.Length)..];
+            var digits = new string(tail.TakeWhile(char.IsDigit).ToArray());
+            return int.TryParse(digits, out appId);
+        }
+
+        return false;
+    }
+
+    private static bool TryGetAppId(LaunchGameCommand command, out int appId)
+    {
+        if (TryParseAppId(command.GameId, out appId))
+        {
+            return true;
+        }
+
+        return TryParseAppIdFromLaunchUrl(command.LaunchUrl, out appId);
+    }
+
     private static Dictionary<int, DateTime> SnapshotProcessStarts()
     {
         var snapshot = new Dictionary<int, DateTime>();
@@ -834,6 +885,37 @@ public sealed class AgentService : IDisposable
         {
             return null;
         }
+    }
+
+    private int? ResolveRunningPid(int appId)
+    {
+        if (!SteamLibraryScanner.TryGetInstallDir(appId, out var installDir) || string.IsNullOrWhiteSpace(installDir))
+        {
+            return null;
+        }
+
+        foreach (var process in Process.GetProcesses())
+        {
+            try
+            {
+                var path = TryGetProcessPath(process);
+                if (!string.IsNullOrWhiteSpace(path) &&
+                    path.StartsWith(installDir, StringComparison.OrdinalIgnoreCase))
+                {
+                    return process.Id;
+                }
+            }
+            catch
+            {
+                // ignore
+            }
+            finally
+            {
+                process.Dispose();
+            }
+        }
+
+        return null;
     }
 
     private void RecordLaunchSession(
