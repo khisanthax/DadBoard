@@ -8,6 +8,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
 using System.Net.WebSockets;
+using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
@@ -27,6 +28,7 @@ public sealed class AgentService : IDisposable
     private readonly string _agentDir;
     private readonly string _logDir;
     private readonly string _statePath;
+    private readonly string _launchSessionsPath;
     private readonly string _configPath;
     private readonly AgentLogger _logger;
     private readonly AgentStateWriter _stateWriter;
@@ -52,8 +54,15 @@ public sealed class AgentService : IDisposable
     private string _updateConfigError = "";
     private readonly TimeSpan _updateConfigTimeout = TimeSpan.FromSeconds(2);
     private readonly TimeSpan _manifestTimeout = TimeSpan.FromSeconds(5);
+    private Dictionary<int, LaunchSession> _launchSessions = new();
+    private const int QuitGraceSecondsDefault = 10;
 
     public event Action? ShutdownRequested;
+
+    private const int WM_CLOSE = 0x0010;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
     public AgentService(string? baseDir = null)
     {
@@ -61,6 +70,7 @@ public sealed class AgentService : IDisposable
         _agentDir = Path.Combine(_baseDir, "Agent");
         _logDir = Path.Combine(_baseDir, "logs");
         _statePath = Path.Combine(_agentDir, "agent_state.json");
+        _launchSessionsPath = Path.Combine(_agentDir, "launch_sessions.json");
         _configPath = ResolveConfigPath();
 
         Directory.CreateDirectory(_agentDir);
@@ -84,6 +94,7 @@ public sealed class AgentService : IDisposable
                 DisplayName = _config.DisplayName
             };
             _updateState = UpdateStateStore.Load();
+            _launchSessions = LaunchSessionStore.Load(_launchSessionsPath, message => _logger.Warn(message));
             ApplySetupResultIfPresent("startup");
             _ = Task.Run(InitializeUpdateConfigAsync);
 
@@ -318,6 +329,24 @@ public sealed class AgentService : IDisposable
             return;
         }
 
+        if (envelope.Type == ProtocolConstants.TypeCommandQuitGame)
+        {
+            var command = envelope.Payload.Deserialize<QuitGameCommand>(JsonUtil.Options);
+            if (command == null)
+            {
+                SendAck(socket, envelope.CorrelationId, ok: false, "Invalid payload");
+                return;
+            }
+
+            _logger.Info($"Received QuitGame corr={envelope.CorrelationId} appId={command.AppId}");
+            _state.LastCommandId = envelope.CorrelationId;
+            _state.LastCommandType = envelope.Type;
+            _state.LastCommandTs = DateTime.UtcNow.ToString("O");
+
+            _ = Task.Run(() => ExecuteQuitGame(envelope.CorrelationId, command, socket));
+            return;
+        }
+
         if (envelope.Type == ProtocolConstants.TypeCommandScanSteamGames)
         {
             _state.LastCommandId = envelope.CorrelationId;
@@ -451,6 +480,11 @@ public sealed class AgentService : IDisposable
         try
         {
             SendStatus(correlationId, "launching", command.GameId, "Launching game.");
+            var hasAppId = TryParseAppId(command.GameId, out var appId);
+            var installDir = hasAppId && SteamLibraryScanner.TryGetInstallDir(appId, out var foundDir)
+                ? foundDir
+                : null;
+            var beforeSnapshot = hasAppId ? SnapshotProcessStarts() : new Dictionary<int, DateTime>();
 
             if (!string.IsNullOrWhiteSpace(command.LaunchUrl))
             {
@@ -464,6 +498,13 @@ public sealed class AgentService : IDisposable
             {
                 SendStatus(correlationId, "failed", command.GameId, "No launch target provided.", "config_invalid");
                 return;
+            }
+
+            if (hasAppId)
+            {
+                var resolvedPid = await ResolveGamePidAsync(appId, installDir, command.ProcessNames, beforeSnapshot, _cts.Token)
+                    .ConfigureAwait(false);
+                RecordLaunchSession(appId, command.GameId, installDir, resolvedPid, command.LaunchUrl, command.ExePath);
             }
 
             bool ready = await WaitForProcess(command.ProcessNames, command.ReadyTimeoutSec).ConfigureAwait(false);
@@ -490,6 +531,65 @@ public sealed class AgentService : IDisposable
         {
             SendStatus(correlationId, "failed", command.GameId, ex.Message, "launch_failed");
             _logger.Error($"LaunchGame failed corr={correlationId}: {ex.Message}");
+        }
+    }
+
+    private async Task ExecuteQuitGame(string correlationId, QuitGameCommand command, WebSocket socket)
+    {
+        SendStatus(correlationId, "quit_starting", command.AppId.ToString(), "Stopping game.");
+        SendAck(socket, correlationId, ok: true, null);
+
+        try
+        {
+            if (!_launchSessions.TryGetValue(command.AppId, out var session) || session.RootPid is not int pid)
+            {
+                SendStatus(correlationId, "quit_failed", command.AppId.ToString(),
+                    "No tracked launch session for this game on this PC.", "no_session");
+                return;
+            }
+
+            Process? process = null;
+            try
+            {
+                process = Process.GetProcessById(pid);
+            }
+            catch (Exception)
+            {
+                _launchSessions.Remove(command.AppId);
+                SaveLaunchSessions();
+                SendStatus(correlationId, "quit_failed", command.AppId.ToString(),
+                    "Tracked process is no longer running.", "not_running");
+                return;
+            }
+
+            SendStatus(correlationId, "quit_graceful_sent", command.AppId.ToString(), "Requesting graceful close.");
+            TryCloseProcessWindow(process);
+
+            var graceSeconds = command.GraceSeconds > 0 ? command.GraceSeconds : QuitGraceSecondsDefault;
+            var stopped = await WaitForExitAsync(process, TimeSpan.FromSeconds(graceSeconds)).ConfigureAwait(false);
+
+            if (!stopped)
+            {
+                SendStatus(correlationId, "quit_force_killing", command.AppId.ToString(), "Force killing process.");
+                var killed = ForceKillProcessTree(process.Id);
+                _logger.Info($"QuitGame force kill pid={pid} killed={killed}");
+                stopped = await WaitForExitAsync(process, TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            }
+
+            if (stopped)
+            {
+                _launchSessions.Remove(command.AppId);
+                SaveLaunchSessions();
+                SendStatus(correlationId, "quit_completed", command.AppId.ToString(), "Game stopped.");
+                return;
+            }
+
+            SendStatus(correlationId, "quit_failed", command.AppId.ToString(), "Game process did not exit.", "quit_failed");
+        }
+        catch (Exception ex)
+        {
+            SendStatus(correlationId, "quit_failed", command.AppId.ToString(), ex.Message, "quit_failed");
+            _logger.Error($"QuitGame failed corr={correlationId}: {ex.Message}");
         }
     }
 
@@ -609,6 +709,222 @@ public sealed class AgentService : IDisposable
         {
             SendStatus(correlationId, "steam_restart_failed", null, ex.Message, "restart_failed");
             _logger.Error($"RestartSteam failed corr={correlationId}: {ex.Message}");
+        }
+    }
+
+    private static bool TryParseAppId(string? gameId, out int appId)
+    {
+        appId = 0;
+        if (string.IsNullOrWhiteSpace(gameId))
+        {
+            return false;
+        }
+
+        return int.TryParse(gameId, out appId);
+    }
+
+    private static Dictionary<int, DateTime> SnapshotProcessStarts()
+    {
+        var snapshot = new Dictionary<int, DateTime>();
+        foreach (var process in Process.GetProcesses())
+        {
+            try
+            {
+                snapshot[process.Id] = process.StartTime;
+            }
+            catch
+            {
+                snapshot[process.Id] = DateTime.MinValue;
+            }
+            finally
+            {
+                process.Dispose();
+            }
+        }
+
+        return snapshot;
+    }
+
+    private async Task<int?> ResolveGamePidAsync(
+        int appId,
+        string? installDir,
+        string[]? processNames,
+        Dictionary<int, DateTime> before,
+        CancellationToken token)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        var normalizedNames = NormalizeProcessNames(processNames);
+
+        while (DateTime.UtcNow < deadline && !token.IsCancellationRequested)
+        {
+            foreach (var process in Process.GetProcesses())
+            {
+                try
+                {
+                    if (before.ContainsKey(process.Id))
+                    {
+                        continue;
+                    }
+
+                    var path = TryGetProcessPath(process);
+                    if (!string.IsNullOrWhiteSpace(installDir) && !string.IsNullOrWhiteSpace(path) &&
+                        path.StartsWith(installDir, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _logger.Info($"LaunchGame resolved pid={process.Id} appId={appId} path={path}");
+                        return process.Id;
+                    }
+
+                    if (normalizedNames.Count > 0 &&
+                        normalizedNames.Contains(process.ProcessName, StringComparer.OrdinalIgnoreCase))
+                    {
+                        _logger.Info($"LaunchGame resolved pid={process.Id} appId={appId} name={process.ProcessName}");
+                        return process.Id;
+                    }
+                }
+                catch
+                {
+                    // ignore access issues
+                }
+                finally
+                {
+                    process.Dispose();
+                }
+            }
+
+            await Task.Delay(1000, token).ConfigureAwait(false);
+        }
+
+        _logger.Warn($"LaunchGame PID unresolved appId={appId}");
+        return null;
+    }
+
+    private static HashSet<string> NormalizeProcessNames(string[]? processNames)
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (processNames == null)
+        {
+            return names;
+        }
+
+        foreach (var name in processNames)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                continue;
+            }
+
+            var trimmed = name.Trim();
+            var normalized = Path.GetFileNameWithoutExtension(trimmed);
+            if (!string.IsNullOrWhiteSpace(normalized))
+            {
+                names.Add(normalized);
+            }
+        }
+
+        return names;
+    }
+
+    private static string? TryGetProcessPath(Process process)
+    {
+        try
+        {
+            return process.MainModule?.FileName;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private void RecordLaunchSession(
+        int appId,
+        string? gameId,
+        string? installDir,
+        int? pid,
+        string? launchUrl,
+        string? exePath)
+    {
+        var session = new LaunchSession
+        {
+            AppId = appId,
+            RootPid = pid,
+            GameName = gameId,
+            InstallDir = installDir,
+            ExePath = exePath,
+            LaunchMethod = string.IsNullOrWhiteSpace(launchUrl) ? "exe" : "steam",
+            StartedAtUtc = DateTime.UtcNow.ToString("O"),
+            LastSeenRunningUtc = pid.HasValue ? DateTime.UtcNow.ToString("O") : null,
+            ResolvedPid = pid.HasValue
+        };
+
+        _launchSessions[appId] = session;
+        SaveLaunchSessions();
+        _logger.Info($"LaunchGame session recorded appId={appId} pid={(pid?.ToString() ?? "none")} installDir={installDir ?? "none"}");
+    }
+
+    private void SaveLaunchSessions()
+    {
+        LaunchSessionStore.Save(_launchSessionsPath, _launchSessions, message => _logger.Warn(message));
+    }
+
+    private static void TryCloseProcessWindow(Process process)
+    {
+        try
+        {
+            if (process.MainWindowHandle != IntPtr.Zero)
+            {
+                process.CloseMainWindow();
+                SendMessage(process.MainWindowHandle, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+            }
+        }
+        catch
+        {
+            // ignore
+        }
+    }
+
+    private static async Task<bool> WaitForExitAsync(Process process, TimeSpan timeout)
+    {
+        try
+        {
+            return await Task.Run(() => process.WaitForExit((int)timeout.TotalMilliseconds)).ConfigureAwait(false);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private bool ForceKillProcessTree(int pid)
+    {
+        try
+        {
+            var startInfo = new ProcessStartInfo("taskkill", $"/PID {pid} /T /F")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using var taskkill = Process.Start(startInfo);
+            if (taskkill != null)
+            {
+                taskkill.WaitForExit(5000);
+                return taskkill.ExitCode == 0;
+            }
+        }
+        catch
+        {
+            // ignore
+        }
+
+        try
+        {
+            using var proc = Process.GetProcessById(pid);
+            proc.Kill(true);
+            return true;
+        }
+        catch
+        {
+            return false;
         }
     }
 

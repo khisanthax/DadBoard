@@ -11,6 +11,7 @@ public static class ProtocolConstants
     public const string TypeCommandLaunchGame = "Command.LaunchGame";
     public const string TypeCommandLaunchExe = "Command.LaunchExe";
     public const string TypeCommandRestartSteam = "Command.RestartSteam";
+    public const string TypeCommandQuitGame = "Command.QuitGame";
     public const string TypeCommandShutdownApp = "Command.ShutdownApp";
     public const string TypeCommandScanSteamGames = "Command.ScanSteamGames";
     public const string TypeCommandUpdateSelf = "Command.UpdateSelf";
@@ -70,6 +71,13 @@ public sealed class LaunchExeCommand
 public sealed class RestartSteamCommand
 {
     public bool ForceLogin { get; set; } = true;
+}
+
+public sealed class QuitGameCommand
+{
+    public int AppId { get; set; }
+    public bool Force { get; set; } = true;
+    public int GraceSeconds { get; set; } = 10;
 }
 
 public sealed class ShutdownAppCommand
@@ -172,6 +180,7 @@ public sealed class SteamGameEntry
 {
     public int AppId { get; set; }
     public string? Name { get; set; }
+    public string? InstallDir { get; set; }
 }
 
 public sealed class GameInventory

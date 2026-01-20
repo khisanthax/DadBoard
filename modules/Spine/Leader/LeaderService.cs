@@ -405,6 +405,35 @@ public sealed class LeaderService : IDisposable
         }
     }
 
+    public async Task<(bool Ok, string? Error)> QuitGameOnAgentAsync(int appId, string pcId)
+    {
+        EnsureLocalAgentEntry();
+        if (!_agents.TryGetValue(pcId, out var agent))
+        {
+            return (false, "Agent not found.");
+        }
+
+        if (!agent.Online)
+        {
+            return (false, "Agent is offline.");
+        }
+
+        try
+        {
+            return await SendQuitGame(agent, appId).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            agent.LastStatus = "quit_failed";
+            agent.LastStatusMessage = ex.Message;
+            agent.LastResult = "Failed";
+            agent.LastError = ex.Message;
+            agent.LastErrorClass = "quit_failed";
+            _logger.Error($"QuitGame failed for {agent.Name}: {ex}");
+            return (false, ex.Message);
+        }
+    }
+
     private void EnsureLocalAgentEntry()
     {
         if (string.IsNullOrWhiteSpace(_localAgentPcId))
@@ -1356,6 +1385,67 @@ public sealed class LeaderService : IDisposable
         }
     }
 
+    private async Task<(bool Ok, string? Error)> SendQuitGame(AgentInfo agent, int appId)
+    {
+        var connection = await EnsureConnection(agent).ConfigureAwait(false);
+        if (connection == null || connection.Socket.State != WebSocketState.Open)
+        {
+            agent.LastStatus = "ws_error";
+            agent.LastStatusMessage = connection?.LastError ?? "Unable to connect";
+            agent.LastResult = "Failed (rpc_error)";
+            agent.LastError = agent.LastStatusMessage;
+            agent.LastErrorClass = "rpc_error";
+            _logger.Warn($"QuitGame failed for {agent.Name}: {agent.LastStatusMessage}");
+            return (false, agent.LastStatusMessage);
+        }
+
+        var correlationId = Guid.NewGuid().ToString("N");
+        var payload = new QuitGameCommand
+        {
+            AppId = appId,
+            Force = true,
+            GraceSeconds = 10
+        };
+
+        var envelope = new
+        {
+            type = ProtocolConstants.TypeCommandQuitGame,
+            correlationId,
+            pcId = agent.PcId,
+            payload,
+            ts = DateTime.UtcNow.ToString("O")
+        };
+
+        var json = JsonSerializer.Serialize(envelope, JsonUtil.Options);
+        var buffer = Encoding.UTF8.GetBytes(json);
+
+        agent.LastCommandId = correlationId;
+        agent.LastCommandTs = DateTime.UtcNow;
+        agent.LastStatus = "quit_starting";
+        agent.LastStatusMessage = $"Quitting app {appId}";
+        agent.LastResult = "Pending";
+        agent.LastError = "";
+        agent.LastErrorClass = "";
+        StartTimeout(agent.PcId, correlationId);
+        _logger.Info($"QuitGame requested appId={appId} pcId={agent.PcId} ip={agent.Ip} ws={agent.WsPort} corr={correlationId}");
+
+        try
+        {
+            await connection.Socket.SendAsync(buffer, WebSocketMessageType.Text, true, _cts.Token).ConfigureAwait(false);
+            return (true, null);
+        }
+        catch (Exception ex)
+        {
+            agent.LastStatus = "quit_failed";
+            agent.LastStatusMessage = ex.Message;
+            agent.LastResult = "Failed";
+            agent.LastError = ex.Message;
+            agent.LastErrorClass = "quit_failed";
+            _logger.Error($"QuitGame send failed for {agent.Name}: {ex}");
+            return (false, ex.Message);
+        }
+    }
+
     public void LogLaunchRequest(int appId, string gameName, IEnumerable<string> pcIds)
     {
         var targets = string.Join(",", pcIds);
@@ -1557,7 +1647,9 @@ public sealed class LeaderService : IDisposable
                 if (agent.LastStatus != "running" &&
                     agent.LastStatus != "failed" &&
                     agent.LastStatus != "steam_restart_completed" &&
-                    agent.LastStatus != "steam_restart_failed")
+                    agent.LastStatus != "steam_restart_failed" &&
+                    agent.LastStatus != "quit_completed" &&
+                    agent.LastStatus != "quit_failed")
                 {
                     agent.LastStatus = "timeout";
                     var noAck = agent.LastAckTs == default || agent.LastAckTs < agent.LastCommandTs;
@@ -2333,6 +2425,14 @@ public sealed class LeaderService : IDisposable
             return;
         }
 
+        if (string.Equals(state, "quit_completed", StringComparison.OrdinalIgnoreCase))
+        {
+            agent.LastResult = "Success";
+            agent.LastError = "";
+            agent.LastErrorClass = "";
+            return;
+        }
+
         if (string.Equals(state, "failed", StringComparison.OrdinalIgnoreCase))
         {
             var suffix = string.IsNullOrWhiteSpace(errorClass) ? "" : $" ({errorClass})";
@@ -2348,6 +2448,15 @@ public sealed class LeaderService : IDisposable
             agent.LastResult = $"Failed{suffix}";
             agent.LastError = message ?? "";
             agent.LastErrorClass = string.IsNullOrWhiteSpace(errorClass) ? "restart_failed" : errorClass;
+            return;
+        }
+
+        if (string.Equals(state, "quit_failed", StringComparison.OrdinalIgnoreCase))
+        {
+            var suffix = string.IsNullOrWhiteSpace(errorClass) ? "" : $" ({errorClass})";
+            agent.LastResult = $"Failed{suffix}";
+            agent.LastError = message ?? "";
+            agent.LastErrorClass = string.IsNullOrWhiteSpace(errorClass) ? "quit_failed" : errorClass;
             return;
         }
 

@@ -42,6 +42,8 @@ public sealed class LeaderForm : Form
     private readonly FlowLayoutPanel _targetPanel = new();
     private readonly Button _launchAllOnlineButton = new();
     private readonly Button _launchSelectedButton = new();
+    private readonly Button _quitAllButton = new();
+    private readonly Button _quitSelectedButton = new();
     private readonly Button _restartSteamButton = new();
     private readonly Button _selectAllOnlineButton = new();
     private readonly Button _clearTargetsButton = new();
@@ -74,6 +76,8 @@ public sealed class LeaderForm : Form
     private bool _allowClose;
     private HashSet<string>? _pendingLaunchTargets;
     private int? _pendingLaunchAppId;
+    private HashSet<string>? _pendingQuitTargets;
+    private int? _pendingQuitAppId;
     private int? _lastSelectedGameAppId;
     private bool _suppressTargetEvents;
     private bool _lastLaunchAllEnabled;
@@ -333,16 +337,36 @@ public sealed class LeaderForm : Form
 
         _launchAllOnlineButton.Text = "Launch All";
         _launchAllOnlineButton.Height = 32;
+        _launchAllOnlineButton.AutoSize = true;
+        _launchAllOnlineButton.MinimumSize = new Size(110, 32);
         _launchAllOnlineButton.Enabled = false;
         _launchAllOnlineButton.Click += async (_, _) => await LaunchAllOnlineTargets();
 
         _launchSelectedButton.Text = "Launch Selected";
         _launchSelectedButton.Height = 32;
+        _launchSelectedButton.AutoSize = true;
+        _launchSelectedButton.MinimumSize = new Size(130, 32);
         _launchSelectedButton.Enabled = false;
         _launchSelectedButton.Click += async (_, _) => await LaunchSelectedTargets();
 
+        _quitAllButton.Text = "Quit All";
+        _quitAllButton.Height = 32;
+        _quitAllButton.AutoSize = true;
+        _quitAllButton.MinimumSize = new Size(110, 32);
+        _quitAllButton.Enabled = false;
+        _quitAllButton.Click += async (_, _) => await QuitAllTargets();
+
+        _quitSelectedButton.Text = "Quit";
+        _quitSelectedButton.Height = 32;
+        _quitSelectedButton.AutoSize = true;
+        _quitSelectedButton.MinimumSize = new Size(90, 32);
+        _quitSelectedButton.Enabled = false;
+        _quitSelectedButton.Click += async (_, _) => await QuitSelectedTargets();
+
         _restartSteamButton.Text = "Restart Steam";
         _restartSteamButton.Height = 32;
+        _restartSteamButton.AutoSize = true;
+        _restartSteamButton.MinimumSize = new Size(130, 32);
         _restartSteamButton.Enabled = false;
         _restartSteamButton.Click += async (_, _) => await RestartSteamTargets();
 
@@ -398,16 +422,21 @@ public sealed class LeaderForm : Form
         {
             Dock = DockStyle.Fill,
             FlowDirection = FlowDirection.LeftToRight,
-            AutoSize = true
+            AutoSize = true,
+            WrapContents = true
         };
 
         _selectAllOnlineButton.Text = "Select all online";
         _selectAllOnlineButton.Height = 32;
+        _selectAllOnlineButton.AutoSize = true;
+        _selectAllOnlineButton.MinimumSize = new Size(130, 32);
         _selectAllOnlineButton.Enabled = false;
         _selectAllOnlineButton.Click += (_, _) => SelectAllOnlineTargets();
 
         _clearTargetsButton.Text = "Clear";
         _clearTargetsButton.Height = 32;
+        _clearTargetsButton.AutoSize = true;
+        _clearTargetsButton.MinimumSize = new Size(80, 32);
         _clearTargetsButton.Enabled = false;
         _clearTargetsButton.Click += (_, _) => ClearTargetSelection();
 
@@ -415,6 +444,8 @@ public sealed class LeaderForm : Form
         {
             _launchAllOnlineButton,
             _launchSelectedButton,
+            _quitAllButton,
+            _quitSelectedButton,
             _restartSteamButton,
             _selectAllOnlineButton,
             _clearTargetsButton
@@ -612,6 +643,7 @@ public sealed class LeaderForm : Form
 
             UpdateAgentActions();
             UpdateLaunchProgress(snapshot);
+            UpdateQuitProgress(snapshot);
             var onlineSummary = $"Agents online: {snapshot.Count(a => a.Online)} / {snapshot.Count}";
             var selectedFailure = GetSelectedAgentFailureMessage();
             _statusLabel.Text = string.IsNullOrWhiteSpace(selectedFailure) ? onlineSummary : selectedFailure;
@@ -700,7 +732,7 @@ public sealed class LeaderForm : Form
                     else
                     {
                         cell.Value = "No";
-                        cell.Style.ForeColor = Color.DimGray;
+                        cell.Style.ForeColor = Color.DarkSlateGray;
                         cell.Style.BackColor = SystemColors.Control;
                         cell.ToolTipText = "Not installed";
                     }
@@ -943,6 +975,110 @@ public sealed class LeaderForm : Form
         _pendingLaunchTargets = new HashSet<string>(successes, StringComparer.OrdinalIgnoreCase);
         _pendingLaunchAppId = selection.Value.AppId;
         _statusLabel.Text = $"Launching {selection.Value.Name} on {successes.Count} PC(s)...";
+        UpdateGameActions();
+        RefreshAgentsGridSafe();
+
+        if (failures.Count > 0)
+        {
+            MessageBox.Show(
+                $"Some targets failed to accept the command:{Environment.NewLine}{string.Join(Environment.NewLine, failures)}",
+                "DadBoard",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+    }
+
+    private async Task QuitSelectedTargets()
+    {
+        var selection = GetSelectedGame();
+        if (selection == null)
+        {
+            MessageBox.Show("Select a game row first.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var checkedPcs = GetCheckedTargetPcIds();
+        if (checkedPcs.Count == 0)
+        {
+            MessageBox.Show("Select at least one target PC to quit the game.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            _statusLabel.Text = "Quit failed: no target PCs selected.";
+            return;
+        }
+
+        _quitSelectedButton.Enabled = false;
+        _quitAllButton.Enabled = false;
+        _statusLabel.Text = $"Stopping {selection.Value.Name} on {checkedPcs.Count} PC(s)...";
+
+        var (successes, failures) = await QuitOnTargets(selection.Value.AppId, checkedPcs);
+        if (successes.Count == 0)
+        {
+            var message = "Quit failed: no targets accepted the command.";
+            if (failures.Count > 0)
+            {
+                message = $"Quit failed:{Environment.NewLine}{string.Join(Environment.NewLine, failures)}";
+            }
+
+            MessageBox.Show(message, "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            _statusLabel.Text = "Quit failed: no targets accepted the command.";
+            UpdateGameActions();
+            return;
+        }
+
+        _pendingQuitTargets = new HashSet<string>(successes, StringComparer.OrdinalIgnoreCase);
+        _pendingQuitAppId = selection.Value.AppId;
+        _statusLabel.Text = $"Stopping {selection.Value.Name} on {successes.Count} PC(s)...";
+        UpdateGameActions();
+        RefreshAgentsGridSafe();
+
+        if (failures.Count > 0)
+        {
+            MessageBox.Show(
+                $"Some targets failed to accept the command:{Environment.NewLine}{string.Join(Environment.NewLine, failures)}",
+                "DadBoard",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+    }
+
+    private async Task QuitAllTargets()
+    {
+        var selection = GetSelectedGame();
+        if (selection == null)
+        {
+            MessageBox.Show("Select a game row first.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var onlineTargets = GetEligibleOnlineTargetPcIds();
+        if (onlineTargets.Count == 0)
+        {
+            MessageBox.Show("No online targets available for this game.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            _statusLabel.Text = "Quit failed: no online targets available.";
+            return;
+        }
+
+        _quitSelectedButton.Enabled = false;
+        _quitAllButton.Enabled = false;
+        _statusLabel.Text = $"Stopping {selection.Value.Name} on {onlineTargets.Count} PC(s)...";
+
+        var (successes, failures) = await QuitOnTargets(selection.Value.AppId, onlineTargets);
+        if (successes.Count == 0)
+        {
+            var message = "Quit failed: no targets accepted the command.";
+            if (failures.Count > 0)
+            {
+                message = $"Quit failed:{Environment.NewLine}{string.Join(Environment.NewLine, failures)}";
+            }
+
+            MessageBox.Show(message, "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            _statusLabel.Text = "Quit failed: no targets accepted the command.";
+            UpdateGameActions();
+            return;
+        }
+
+        _pendingQuitTargets = new HashSet<string>(successes, StringComparer.OrdinalIgnoreCase);
+        _pendingQuitAppId = selection.Value.AppId;
+        _statusLabel.Text = $"Stopping {selection.Value.Name} on {successes.Count} PC(s)...";
         UpdateGameActions();
         RefreshAgentsGridSafe();
 
@@ -1312,6 +1448,25 @@ public sealed class LeaderForm : Form
         foreach (var pcId in targets)
         {
             var result = await _service.LaunchAppIdOnAgentAsync(appId, pcId);
+            if (!result.Ok)
+            {
+                failures.Add($"{pcId}: {result.Error ?? "Unknown error"}");
+                continue;
+            }
+
+            successes.Add(pcId);
+        }
+
+        return (successes, failures);
+    }
+
+    private async Task<(List<string> Successes, List<string> Failures)> QuitOnTargets(int appId, List<string> targets)
+    {
+        var failures = new List<string>();
+        var successes = new List<string>();
+        foreach (var pcId in targets)
+        {
+            var result = await _service.QuitGameOnAgentAsync(appId, pcId);
             if (!result.Ok)
             {
                 failures.Add($"{pcId}: {result.Error ?? "Unknown error"}");
@@ -1943,11 +2098,15 @@ public sealed class LeaderForm : Form
         {
             _launchAllOnlineButton.Enabled = false;
             _launchSelectedButton.Enabled = false;
+            _quitAllButton.Enabled = false;
+            _quitSelectedButton.Enabled = false;
             _selectAllOnlineButton.Enabled = false;
             _clearTargetsButton.Enabled = _selectedTargets.Count > 0;
             _restartSteamButton.Enabled = GetEligibleOnlineTargetPcIds().Count > 0 || GetCheckedTargetPcIds().Count > 0;
             _toolTip.SetToolTip(_launchAllOnlineButton, "Select a game to enable launch.");
             _toolTip.SetToolTip(_launchSelectedButton, "Select a game and at least one target PC.");
+            _toolTip.SetToolTip(_quitAllButton, "Select a game to enable quit.");
+            _toolTip.SetToolTip(_quitSelectedButton, "Select a game and at least one target PC.");
             _toolTip.SetToolTip(_restartSteamButton, _restartSteamButton.Enabled
                 ? ""
                 : "Select targets to restart Steam.");
@@ -1959,13 +2118,18 @@ public sealed class LeaderForm : Form
 
         var checkedTargets = GetCheckedTargetPcIds();
         var onlineTargets = GetEligibleOnlineTargetPcIds();
-        _launchAllOnlineButton.Enabled = onlineTargets.Count > 0 && _pendingLaunchTargets == null;
-        _launchSelectedButton.Enabled = checkedTargets.Count > 0 && _pendingLaunchTargets == null;
+        var hasPending = _pendingLaunchTargets != null || _pendingQuitTargets != null;
+        _launchAllOnlineButton.Enabled = onlineTargets.Count > 0 && !hasPending;
+        _launchSelectedButton.Enabled = checkedTargets.Count > 0 && !hasPending;
+        _quitAllButton.Enabled = onlineTargets.Count > 0 && !hasPending;
+        _quitSelectedButton.Enabled = checkedTargets.Count > 0 && !hasPending;
         _selectAllOnlineButton.Enabled = _targetCheckboxes.Values.Any(cb => cb.Enabled);
         _clearTargetsButton.Enabled = _selectedTargets.Count > 0;
-        _restartSteamButton.Enabled = (onlineTargets.Count > 0 || checkedTargets.Count > 0) && _pendingLaunchTargets == null;
+        _restartSteamButton.Enabled = (onlineTargets.Count > 0 || checkedTargets.Count > 0) && !hasPending;
         _toolTip.SetToolTip(_launchAllOnlineButton, _launchAllOnlineButton.Enabled ? "" : "Select a game and at least one online target PC.");
         _toolTip.SetToolTip(_launchSelectedButton, _launchSelectedButton.Enabled ? "" : "Select a game and at least one target PC.");
+        _toolTip.SetToolTip(_quitAllButton, _quitAllButton.Enabled ? "" : "Select a game and at least one online target PC.");
+        _toolTip.SetToolTip(_quitSelectedButton, _quitSelectedButton.Enabled ? "" : "Select a game and at least one target PC.");
         _toolTip.SetToolTip(_restartSteamButton, _restartSteamButton.Enabled ? "" : "Select targets to restart Steam.");
         if (!_launchAllOnlineButton.Enabled && onlineTargets.Count == 0)
         {
@@ -2023,11 +2187,42 @@ public sealed class LeaderForm : Form
         }
     }
 
+    private void UpdateQuitProgress(IReadOnlyList<AgentInfo> snapshot)
+    {
+        if (_pendingQuitTargets == null || _pendingQuitTargets.Count == 0)
+        {
+            return;
+        }
+
+        var targets = snapshot.Where(agent => _pendingQuitTargets.Contains(agent.PcId)).ToList();
+        if (targets.Count == 0)
+        {
+            _pendingQuitTargets = null;
+            _pendingQuitAppId = null;
+            UpdateGameActions();
+            return;
+        }
+
+        var allDone = targets.All(agent => IsTerminalQuitStatus(agent.LastStatus));
+        if (allDone)
+        {
+            _pendingQuitTargets = null;
+            _pendingQuitAppId = null;
+            UpdateGameActions();
+        }
+    }
+
     private static bool IsTerminalLaunchStatus(string status)
     {
         return string.Equals(status, "running", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(status, "timeout", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsTerminalQuitStatus(string status)
+    {
+        return string.Equals(status, "quit_completed", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(status, "quit_failed", StringComparison.OrdinalIgnoreCase);
     }
 
     private void AgentsGridMouseDown(object? sender, MouseEventArgs e)
@@ -2187,6 +2382,11 @@ public sealed class LeaderForm : Form
             "steam_restart_starting" => "Restarting Steam",
             "steam_restart_completed" => "Steam restarted",
             "steam_restart_failed" => "Steam restart failed",
+            "quit_starting" => "Quitting",
+            "quit_graceful_sent" => "Quitting",
+            "quit_force_killing" => "Force quitting",
+            "quit_completed" => "Quit",
+            "quit_failed" => "Quit failed",
             "stopping" => "Running",
             _ => "Idle"
         };

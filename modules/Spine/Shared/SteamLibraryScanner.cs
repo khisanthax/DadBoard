@@ -68,19 +68,26 @@ public static class SteamLibraryScanner
                 foreach (var manifest in Directory.GetFiles(steamApps, "appmanifest_*.acf"))
                 {
                     manifestCount++;
-                    if (!TryParseManifest(manifest, out var appId, out var name))
+                    if (!TryParseManifest(manifest, out var appId, out var name, out var installDir))
                     {
                         continue;
                     }
 
                     if (!games.TryGetValue(appId, out var entry))
                     {
-                        entry = new SteamGameEntry { AppId = appId, Name = name };
+                        var resolvedInstall = string.IsNullOrWhiteSpace(installDir)
+                            ? null
+                            : Path.Combine(library, "steamapps", "common", installDir);
+                        entry = new SteamGameEntry { AppId = appId, Name = name, InstallDir = resolvedInstall };
                         games[appId] = entry;
                     }
                     else if (string.IsNullOrWhiteSpace(entry.Name) && !string.IsNullOrWhiteSpace(name))
                     {
                         entry.Name = name;
+                    }
+                    else if (string.IsNullOrWhiteSpace(entry.InstallDir) && !string.IsNullOrWhiteSpace(installDir))
+                    {
+                        entry.InstallDir = Path.Combine(library, "steamapps", "common", installDir);
                     }
                 }
             }
@@ -199,10 +206,11 @@ public static class SteamLibraryScanner
         return path.Replace("\\\\", "\\");
     }
 
-    private static bool TryParseManifest(string manifestPath, out int appId, out string? name)
+    private static bool TryParseManifest(string manifestPath, out int appId, out string? name, out string? installDir)
     {
         appId = 0;
         name = null;
+        installDir = null;
 
         var fileName = Path.GetFileNameWithoutExtension(manifestPath);
         if (!string.IsNullOrWhiteSpace(fileName))
@@ -237,6 +245,11 @@ public static class SteamLibraryScanner
                 {
                     name = value;
                 }
+
+                if (string.Equals(key, "installdir", StringComparison.OrdinalIgnoreCase))
+                {
+                    installDir = value;
+                }
             }
         }
         catch
@@ -245,5 +258,60 @@ public static class SteamLibraryScanner
         }
 
         return appId > 0;
+    }
+
+    public static bool TryGetInstallDir(int appId, out string? installDir)
+    {
+        installDir = null;
+        var steamPath = FindSteamPath();
+        if (string.IsNullOrWhiteSpace(steamPath))
+        {
+            return false;
+        }
+
+        var libraryPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (Directory.Exists(steamPath))
+        {
+            libraryPaths.Add(steamPath);
+        }
+
+        var libraryFile = Path.Combine(steamPath, "steamapps", "libraryfolders.vdf");
+        foreach (var path in ReadLibraryPaths(libraryFile))
+        {
+            if (Directory.Exists(path))
+            {
+                libraryPaths.Add(path);
+            }
+        }
+
+        foreach (var library in libraryPaths)
+        {
+            var steamApps = Path.Combine(library, "steamapps");
+            if (!Directory.Exists(steamApps))
+            {
+                continue;
+            }
+
+            var manifest = Path.Combine(steamApps, $"appmanifest_{appId}.acf");
+            if (!File.Exists(manifest))
+            {
+                continue;
+            }
+
+            if (!TryParseManifest(manifest, out var foundId, out _, out var foundInstall))
+            {
+                continue;
+            }
+
+            if (foundId != appId || string.IsNullOrWhiteSpace(foundInstall))
+            {
+                continue;
+            }
+
+            installDir = Path.Combine(library, "steamapps", "common", foundInstall);
+            return true;
+        }
+
+        return false;
     }
 }
