@@ -5,6 +5,7 @@ using System.IO;
 using System.Threading;
 using System.Windows.Forms;
 using DadBoard.Agent;
+using DadBoard.Gate;
 using DadBoard.Leader;
 using DadBoard.Spine.Shared;
 
@@ -24,6 +25,8 @@ sealed class TrayAppContext : ApplicationContext
     private LeaderForm? _leaderForm;
     private StatusForm? _statusForm;
     private DiagnosticsForm? _diagnosticsForm;
+    private GateEngine? _gate;
+    private Gate.StatusForm? _gateStatusForm;
 
     private readonly NotifyIcon _tray;
     private readonly ToolStripMenuItem _enableLeaderItem;
@@ -37,6 +40,13 @@ sealed class TrayAppContext : ApplicationContext
     private readonly ToolStripMenuItem _resetUpdateFailuresItem;
     private readonly ToolStripMenuItem _statusItem;
     private readonly ToolStripMenuItem _diagnosticsItem;
+    private ToolStripMenuItem? _gateLeaderItem;
+    private ToolStripMenuItem? _gateCoItem;
+    private ToolStripMenuItem? _gateNormalItem;
+    private ToolStripMenuItem? _gateDeviceMenu;
+    private ToolStripMenuItem? _gateCalibrateItem;
+    private ToolStripMenuItem? _gateQuickTestItem;
+    private ToolStripMenuItem? _gateStatusItem;
 
     private readonly AppLaunchOptions _options;
     private AgentConfig _config;
@@ -87,7 +97,7 @@ sealed class TrayAppContext : ApplicationContext
         _diagnosticsItem = new ToolStripMenuItem("Diagnostics", null, (_, _) => ShowDiagnostics());
 
         var menu = new ContextMenuStrip();
-        menu.Items.AddRange(new ToolStripItem[]
+        var items = new System.Collections.Generic.List<ToolStripItem>
         {
             _openDashboardItem,
             _enableLeaderItem,
@@ -103,7 +113,15 @@ sealed class TrayAppContext : ApplicationContext
             _diagnosticsItem,
             new ToolStripSeparator(),
             new ToolStripMenuItem("Exit", null, (_, _) => Exit())
-        });
+        };
+
+        if (_options.Mode == AppMode.Gate)
+        {
+            var gateItems = BuildGateMenuItems();
+            items.InsertRange(3, gateItems);
+        }
+
+        menu.Items.AddRange(items.ToArray());
 
         var trayIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
         _tray = new NotifyIcon
@@ -131,6 +149,11 @@ sealed class TrayAppContext : ApplicationContext
             EnableLeader(showUI: _options.Mode == AppMode.Leader);
         }
 
+        if (_options.Mode == AppMode.Gate)
+        {
+            EnableGateMode();
+        }
+
         UpdateMenuState();
     }
 
@@ -153,6 +176,119 @@ sealed class TrayAppContext : ApplicationContext
         }
 
         UpdateMenuState();
+    }
+
+    private void EnableGateMode()
+    {
+        if (_gate != null)
+        {
+            return;
+        }
+
+        _gate = new GateEngine();
+        _gate.Start();
+        _gateStatusForm = new Gate.StatusForm(_gate);
+        _appLogger.Info("Gate mode enabled.");
+    }
+
+    private ToolStripItem[] BuildGateMenuItems()
+    {
+        _gateLeaderItem = new ToolStripMenuItem("Make this PC Leader", null, (_, _) => _gate?.ClaimRole(Role.Leader));
+        _gateCoItem = new ToolStripMenuItem("Make this PC Co-Captain", null, (_, _) => _gate?.ClaimRole(Role.CoCaptain));
+        _gateNormalItem = new ToolStripMenuItem("Set Normal", null, (_, _) => _gate?.ClaimRole(Role.Normal));
+        _gateDeviceMenu = new ToolStripMenuItem("Input Device");
+        _gateDeviceMenu.DropDownOpening += (_, _) => PopulateGateDevices();
+        _gateCalibrateItem = new ToolStripMenuItem("Calibrate Mic", null, async (_, _) => await RunGateCalibration());
+        _gateQuickTestItem = new ToolStripMenuItem("Quick Test (Gate 5%)", null, async (_, _) => await RunGateQuickTest());
+        _gateStatusItem = new ToolStripMenuItem("Gate Status", null, (_, _) => ShowGateStatus());
+
+        return new ToolStripItem[]
+        {
+            _gateLeaderItem,
+            _gateCoItem,
+            _gateNormalItem,
+            _gateDeviceMenu,
+            _gateCalibrateItem,
+            _gateQuickTestItem,
+            _gateStatusItem,
+            new ToolStripSeparator()
+        };
+    }
+
+    private void PopulateGateDevices()
+    {
+        if (_gate == null || _gateDeviceMenu == null)
+        {
+            return;
+        }
+
+        _gateDeviceMenu.DropDownItems.Clear();
+        var devices = _gate.GetInputDevices();
+        var selectedId = _gate.GetSelectedDeviceId();
+        if (devices.Count == 0)
+        {
+            _gateDeviceMenu.DropDownItems.Add(new ToolStripMenuItem("No capture devices found") { Enabled = false });
+            return;
+        }
+
+        foreach (var device in devices)
+        {
+            var item = new ToolStripMenuItem(device.Name)
+            {
+                Checked = string.Equals(device.Id, selectedId, StringComparison.OrdinalIgnoreCase)
+            };
+            item.Click += (_, _) => _gate.SetInputDevice(device.Id);
+            _gateDeviceMenu.DropDownItems.Add(item);
+        }
+    }
+
+    private async Task RunGateCalibration()
+    {
+        if (_gate == null)
+        {
+            return;
+        }
+
+        using var form = new MeterForm("Calibrate Mic", "Say 1–5 for 3 seconds.");
+        form.Show();
+        try
+        {
+            await _gate.CalibrateMicAsync(form, form.CancellationToken);
+        }
+        finally
+        {
+            form.Close();
+        }
+    }
+
+    private async Task RunGateQuickTest()
+    {
+        if (_gate == null)
+        {
+            return;
+        }
+
+        using var form = new MeterForm("Quick Test", "Mic gated to 5%. Speak to verify VOX stays off.");
+        form.Show();
+        try
+        {
+            await _gate.QuickTestAsync(form, form.CancellationToken);
+        }
+        finally
+        {
+            form.Close();
+        }
+    }
+
+    private void ShowGateStatus()
+    {
+        if (_gateStatusForm == null)
+        {
+            return;
+        }
+
+        _gateStatusForm.Show();
+        _gateStatusForm.BringToFront();
     }
 
     private void DisableLeader()
@@ -514,6 +650,8 @@ sealed class TrayAppContext : ApplicationContext
         _statusForm?.Close();
         _diagnosticsForm?.Close();
         _leader?.Dispose();
+        _gate?.Dispose();
+        _gateStatusForm?.Dispose();
         _appLogger.Info("Stopping agent service.");
         _agent.Stop();
         Dispose();
@@ -537,6 +675,8 @@ sealed class TrayAppContext : ApplicationContext
             _tray.Dispose();
             _leader?.Dispose();
             _agent.Dispose();
+            _gate?.Dispose();
+            _gateStatusForm?.Dispose();
         }
         base.Dispose(disposing);
     }

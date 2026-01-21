@@ -7,7 +7,8 @@ enum AppMode
 {
     Default = 0,
     Agent = 1,
-    Leader = 2
+    Leader = 2,
+    Gate = 3
 }
 
 sealed class AppLaunchOptions
@@ -58,6 +59,11 @@ sealed class AppLaunchOptions
         if (string.Equals(value, "leader", StringComparison.OrdinalIgnoreCase))
         {
             return AppMode.Leader;
+        }
+
+        if (string.Equals(value, "gate", StringComparison.OrdinalIgnoreCase))
+        {
+            return AppMode.Gate;
         }
 
         return AppMode.Default;

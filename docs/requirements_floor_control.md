@@ -13,3 +13,7 @@ Provide a floor-control mode so a leader (and optional co-captain) can speak cle
 - User-triggered (no always-on agent).
 - Prefer safe, explicit actions and timeouts over automatic continuous monitoring.
 - Integrate as a feature of the DadVoice subsystem.
+
+## Networking (current)
+- UDP 39555 is reserved for DadBoard discovery.
+- Floor Control Gate uses UDP 39566 by default (configurable via gate settings).
