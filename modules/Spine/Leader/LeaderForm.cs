@@ -342,10 +342,10 @@ public sealed class LeaderForm : Form
         _launchAllOnlineButton.Enabled = false;
         _launchAllOnlineButton.Click += async (_, _) => await LaunchAllOnlineTargets();
 
-        _launchSelectedButton.Text = "Launch Selected";
+        _launchSelectedButton.Text = "Launch";
         _launchSelectedButton.Height = 32;
         _launchSelectedButton.AutoSize = true;
-        _launchSelectedButton.MinimumSize = new Size(130, 32);
+        _launchSelectedButton.MinimumSize = new Size(110, 32);
         _launchSelectedButton.Enabled = false;
         _launchSelectedButton.Click += async (_, _) => await LaunchSelectedTargets();
 
@@ -366,7 +366,7 @@ public sealed class LeaderForm : Form
         _restartSteamButton.Text = "Restart Steam";
         _restartSteamButton.Height = 32;
         _restartSteamButton.AutoSize = true;
-        _restartSteamButton.MinimumSize = new Size(130, 32);
+        _restartSteamButton.MinimumSize = new Size(150, 32);
         _restartSteamButton.Enabled = false;
         _restartSteamButton.Click += async (_, _) => await RestartSteamTargets();
 
@@ -736,7 +736,7 @@ public sealed class LeaderForm : Form
                     else
                     {
                         cell.Value = "No";
-                        cell.Style.ForeColor = Color.DarkSlateGray;
+                        cell.Style.ForeColor = Color.DimGray;
                         cell.Style.BackColor = SystemColors.Control;
                         cell.ToolTipText = "Not installed";
                     }

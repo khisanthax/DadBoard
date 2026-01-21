@@ -12,16 +12,17 @@ namespace DadBoard.Updater;
 
 sealed class UpdaterEngine
 {
-    private const int PackageDownloadOverallTimeoutMinutes = 20;
-    private const int PackageDownloadStallTimeoutSeconds = 90;
-    private const int PackageDownloadMaxAttempts = 3;
+    private const int PackageDownloadOverallTimeoutMinutes = 60;
+    private const int PackageDownloadStallTimeoutSeconds = 300;
+    private const int PackageDownloadMaxAttempts = 5;
+    private const long PackageDownloadLogIntervalBytes = 5 * 1024 * 1024;
     private readonly HttpClient _http;
 
     public UpdaterEngine()
     {
         _http = new HttpClient
         {
-            Timeout = TimeSpan.FromSeconds(15)
+            Timeout = TimeSpan.FromMinutes(2)
         };
     }
 
@@ -243,6 +244,11 @@ sealed class UpdaterEngine
             return;
         }
 
+        await DownloadHttpFileWithRetriesAsync(packageUrl, destination, ct, log).ConfigureAwait(false);
+    }
+
+    private async Task DownloadHttpFileWithRetriesAsync(string url, string destination, CancellationToken ct, Action<string> log)
+    {
         Exception? lastError = null;
         for (var attempt = 1; attempt <= PackageDownloadMaxAttempts; attempt++)
         {
@@ -254,11 +260,12 @@ sealed class UpdaterEngine
                 };
                 using var overallCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 overallCts.CancelAfter(TimeSpan.FromMinutes(PackageDownloadOverallTimeoutMinutes));
-                using var response = await http.GetAsync(packageUrl, HttpCompletionOption.ResponseHeadersRead, overallCts.Token).ConfigureAwait(false);
+                using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, overallCts.Token).ConfigureAwait(false);
                 response.EnsureSuccessStatusCode();
+                var length = response.Content.Headers.ContentLength;
                 await using var stream = await response.Content.ReadAsStreamAsync(overallCts.Token).ConfigureAwait(false);
                 await using var file = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None);
-                await CopyWithStallTimeoutAsync(stream, file, overallCts.Token, log).ConfigureAwait(false);
+                await CopyWithStallTimeoutAsync(stream, file, length, overallCts.Token, log).ConfigureAwait(false);
                 return;
             }
             catch (Exception ex) when (attempt < PackageDownloadMaxAttempts &&
@@ -279,10 +286,12 @@ sealed class UpdaterEngine
         throw new IOException($"Package download failed after retries: {lastError?.Message}");
     }
 
-    private static async Task CopyWithStallTimeoutAsync(Stream source, Stream destination, CancellationToken ct, Action<string> log)
+    private static async Task CopyWithStallTimeoutAsync(Stream source, Stream destination, long? contentLength, CancellationToken ct, Action<string> log)
     {
         var buffer = new byte[1024 * 64];
         var stallTimeout = TimeSpan.FromSeconds(PackageDownloadStallTimeoutSeconds);
+        long totalRead = 0;
+        long nextLog = PackageDownloadLogIntervalBytes;
 
         while (true)
         {
@@ -298,6 +307,21 @@ sealed class UpdaterEngine
                 }
 
                 await destination.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
+                totalRead += read;
+                if (totalRead >= nextLog)
+                {
+                    if (contentLength.HasValue && contentLength.Value > 0)
+                    {
+                        var percent = (int)Math.Round(totalRead / (double)contentLength.Value * 100);
+                        log($"Download progress: {totalRead / (1024 * 1024)} MB ({percent}%).");
+                    }
+                    else
+                    {
+                        log($"Download progress: {totalRead / (1024 * 1024)} MB.");
+                    }
+
+                    nextLog += PackageDownloadLogIntervalBytes;
+                }
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
@@ -402,11 +426,8 @@ sealed class UpdaterEngine
                     return true;
                 }
 
-                using var response = await _http.GetAsync(candidate, ct).ConfigureAwait(false);
-                response.EnsureSuccessStatusCode();
-                var bytes = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
                 Directory.CreateDirectory(Path.GetDirectoryName(setupExe)!);
-                await File.WriteAllBytesAsync(setupExe, bytes, ct).ConfigureAwait(false);
+                await DownloadHttpFileWithRetriesAsync(candidate, setupExe, ct, log).ConfigureAwait(false);
                 FileUnblocker.TryUnblock(setupExe, log);
                 log($"Downloaded setup from {candidate}");
                 return true;
