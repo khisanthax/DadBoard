@@ -26,14 +26,25 @@ sealed class StatusWriter
 
             var payload = new
             {
+                schemaVersion = snapshot.SchemaVersion,
+                gatePort = snapshot.GatePort,
+                discoveryPort = snapshot.DiscoveryPort,
                 pcId = snapshot.PcId,
                 role = snapshot.EffectiveRole.ToString(),
+                leaderId = snapshot.LeaderId,
+                coCaptainId = snapshot.CoCaptainId,
                 talking = snapshot.Talking,
+                talkStart = snapshot.TalkStart.ToString("O"),
                 allowed = snapshot.Allowed,
                 gated = snapshot.Gated,
                 micScalar = snapshot.MicScalar,
+                baselineVolume = snapshot.BaselineVolume,
+                selectedDeviceId = snapshot.SelectedDeviceId,
+                selectedDeviceName = snapshot.SelectedDeviceName,
                 lastRoleChange = snapshot.LastRoleChange.ToString("O"),
                 lastFloorOwner = snapshot.FloorOwner,
+                lastPeerSeenSeconds = snapshot.LastPeerSeenSeconds,
+                peerCount = snapshot.PeerCount,
                 lastUpdate = snapshot.LastUpdate.ToString("O"),
                 peers = snapshot.Peers
             };

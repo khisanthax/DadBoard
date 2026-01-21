@@ -17,6 +17,7 @@ sealed class GateEngine : IDisposable
     private const int DecisionIntervalMs = 100;
     private const int StatusIntervalMs = 1000;
     private const int PeerTimeoutMs = 15000;
+    private const int DiscoveryPort = 39555;
 
     private readonly object _lock = new();
     private readonly string _pcId;
@@ -454,6 +455,7 @@ sealed class GateEngine : IDisposable
         GateSnapshot snapshot;
         bool gated;
         float micScalar;
+        float baselineVolume;
         lock (_lock)
         {
             var now = DateTime.UtcNow;
@@ -504,38 +506,58 @@ sealed class GateEngine : IDisposable
             _allowed = allowed;
             _lastFloorOwner = floorOwner;
             micScalar = _mic.CurrentVolume;
+            baselineVolume = _mic.BaselineVolume;
 
             PrunePeers(now);
 
-            snapshot = BuildSnapshot(now, micScalar);
+            snapshot = BuildSnapshot(now, micScalar, baselineVolume);
             _lastSnapshot = snapshot;
         }
     }
 
-    private GateSnapshot BuildSnapshot(DateTime now, float micScalar)
+    private GateSnapshot BuildSnapshot(DateTime now, float micScalar, float baselineVolume)
     {
+        var leaderId = _leaderClaim?.PcId;
+        var coId = _coClaim?.PcId;
         var peers = _peers.Values
             .OrderBy(p => p.PcId, StringComparer.OrdinalIgnoreCase)
             .Select(p => new GatePeerSnapshot
             {
                 PcId = p.PcId,
-                EffectiveRole = GetEffectiveRole(_leaderClaim?.PcId, _coClaim?.PcId, p.PcId),
+                EffectiveRole = GetEffectiveRole(leaderId, coId, p.PcId),
                 Talking = IsTalking(p.PcId, now),
                 LastSeen = p.LastSeen
             })
             .ToArray();
 
+        double? lastPeerSeenSeconds = null;
+        if (_peers.Count > 0)
+        {
+            var newest = _peers.Values.Max(p => p.LastSeen);
+            lastPeerSeenSeconds = Math.Max(0, (now - newest).TotalSeconds);
+        }
+
         return new GateSnapshot
         {
+            GatePort = _settings.GatePort,
+            DiscoveryPort = DiscoveryPort,
             PcId = _pcId,
+            LeaderId = leaderId,
+            CoCaptainId = coId,
             EffectiveRole = _effectiveRole,
             Talking = IsTalking(_pcId, now),
             Allowed = _allowed,
             Gated = _gated,
             MicScalar = micScalar,
+            BaselineVolume = baselineVolume,
+            SelectedDeviceId = _settings.SelectedDeviceId,
+            SelectedDeviceName = GateAudioDevices.GetDeviceName(_settings.SelectedDeviceId),
+            TalkStart = _localTalkStart == default ? _localLastTalkActivity : _localTalkStart,
             FloorOwner = _lastFloorOwner,
             LastRoleChange = _lastRoleChange == default ? now : _lastRoleChange,
             LastUpdate = now,
+            LastPeerSeenSeconds = lastPeerSeenSeconds,
+            PeerCount = _peers.Count,
             Peers = peers
         };
     }

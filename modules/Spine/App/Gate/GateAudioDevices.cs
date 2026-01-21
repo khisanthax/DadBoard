@@ -29,4 +29,22 @@ static class GateAudioDevices
             return null;
         }
     }
+
+    public static string? GetDeviceName(string? deviceId)
+    {
+        if (string.IsNullOrWhiteSpace(deviceId))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var enumerator = new MMDeviceEnumerator();
+            return enumerator.GetDevice(deviceId).FriendlyName;
+        }
+        catch
+        {
+            return null;
+        }
+    }
 }

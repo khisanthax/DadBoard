@@ -45,15 +45,26 @@ sealed class PeerState
 
 sealed class GateSnapshot
 {
+    public int SchemaVersion { get; set; } = 1;
+    public int GatePort { get; set; }
+    public int DiscoveryPort { get; set; }
     public string PcId { get; set; } = "";
+    public string? LeaderId { get; set; }
+    public string? CoCaptainId { get; set; }
     public Role EffectiveRole { get; set; }
     public bool Talking { get; set; }
     public bool Allowed { get; set; }
     public bool Gated { get; set; }
     public float MicScalar { get; set; }
+    public float BaselineVolume { get; set; }
+    public string? SelectedDeviceId { get; set; }
+    public string? SelectedDeviceName { get; set; }
+    public DateTime TalkStart { get; set; }
     public string? FloorOwner { get; set; }
     public DateTime LastRoleChange { get; set; }
     public DateTime LastUpdate { get; set; }
+    public double? LastPeerSeenSeconds { get; set; }
+    public int PeerCount { get; set; }
     public GatePeerSnapshot[] Peers { get; set; } = Array.Empty<GatePeerSnapshot>();
 }
 
