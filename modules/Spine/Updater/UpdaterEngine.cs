@@ -12,6 +12,7 @@ namespace DadBoard.Updater;
 
 sealed class UpdaterEngine
 {
+    private const int ManifestDownloadTimeoutSeconds = 120;
     private const int PackageDownloadOverallTimeoutMinutes = 60;
     private const int PackageDownloadStallTimeoutSeconds = 300;
     private const int PackageDownloadMaxAttempts = 5;
@@ -22,7 +23,7 @@ sealed class UpdaterEngine
     {
         _http = new HttpClient
         {
-            Timeout = TimeSpan.FromMinutes(2)
+            Timeout = Timeout.InfiniteTimeSpan
         };
     }
 
@@ -221,9 +222,11 @@ sealed class UpdaterEngine
             }
 
             log($"Fetching manifest from {manifestUrl}");
-            using var response = await _http.GetAsync(manifestUrl, ct).ConfigureAwait(false);
+            using var manifestCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            manifestCts.CancelAfter(TimeSpan.FromSeconds(ManifestDownloadTimeoutSeconds));
+            using var response = await _http.GetAsync(manifestUrl, manifestCts.Token).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
-            var content = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            var content = await response.Content.ReadAsStringAsync(manifestCts.Token).ConfigureAwait(false);
             return JsonSerializer.Deserialize<UpdateManifest>(content);
         }
         catch (Exception ex)
