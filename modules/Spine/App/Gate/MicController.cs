@@ -30,7 +30,10 @@ sealed class MicController : IDisposable
 
     public void SwitchDevice(string? deviceId)
     {
-        _endpoint?.OnVolumeNotification -= OnVolumeNotification;
+        if (_endpoint != null)
+        {
+            _endpoint.OnVolumeNotification -= OnVolumeNotification;
+        }
         _endpoint = null;
         _device?.Dispose();
 

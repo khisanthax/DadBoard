@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using NAudio.CoreAudioApi;
+using CoreAudioRole = NAudio.CoreAudioApi.Role;
 
 namespace DadBoard.Gate;
 
@@ -21,7 +22,7 @@ static class GateAudioDevices
         using var enumerator = new MMDeviceEnumerator();
         try
         {
-            return enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications).ID;
+            return enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, CoreAudioRole.Communications).ID;
         }
         catch
         {

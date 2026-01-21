@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using NAudio.CoreAudioApi;
+using CoreAudioRole = NAudio.CoreAudioApi.Role;
 using NAudio.Wave;
 
 namespace DadBoard.Gate;
@@ -81,7 +82,7 @@ sealed class AudioSampler : IDisposable
                 return enumerator.GetDevice(deviceId);
             }
 
-            return enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications);
+            return enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, CoreAudioRole.Communications);
         }
         catch
         {
