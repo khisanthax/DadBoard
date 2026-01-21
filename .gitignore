@@ -20,3 +20,12 @@ Thumbs.db
 bin/
 obj/
 node_modules/
+
+# Release artifacts
+DadBoard-*.zip
+DadBoard.exe
+DadBoardUpdater.exe
+DadBoardSetup.exe
+latest.json
+release_payload/
+

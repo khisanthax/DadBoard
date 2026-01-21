@@ -34,6 +34,7 @@ public sealed class LeaderService : IDisposable
     private readonly LeaderLogger _logger;
     private readonly KnownAgentsStore _knownAgentsStore;
     private readonly LeaderStateWriter _stateWriter;
+    private readonly PresenceGate _presenceGate;
     private readonly string? _localAgentPcId;
     private readonly HashSet<string> _localIps;
 
@@ -106,6 +107,7 @@ public sealed class LeaderService : IDisposable
         _updateHttp.Timeout = TimeSpan.FromSeconds(5);
 
         _config = LoadConfig();
+        _presenceGate = new PresenceGate(_config.AfkThresholdSec, msg => _logger.Info(msg));
         LoadInventoryCaches();
 
         StartDiscovery();
@@ -270,38 +272,74 @@ public sealed class LeaderService : IDisposable
     public IReadOnlyList<AgentInfo> GetAgentsSnapshot()
     {
         EnsureLocalAgentEntry();
-        return _agents.Values.Select(a => new AgentInfo
+        return _agents.Values.Select(a =>
         {
-            PcId = a.PcId,
-            Name = a.Name,
-            Ip = a.Ip,
-            WsPort = a.WsPort,
-            LastSeen = a.LastSeen,
-            Online = a.Online,
-            Version = a.Version,
-            LastStatus = a.LastStatus,
-            LastStatusMessage = a.LastStatusMessage,
-            LastCommandId = a.LastCommandId,
-            LastCommandTs = a.LastCommandTs,
-            LastAckOk = a.LastAckOk,
-            LastAckError = a.LastAckError,
-            LastAckTs = a.LastAckTs,
-            LastResult = a.LastResult,
-            LastError = a.LastError,
-            LastErrorClass = a.LastErrorClass,
-            UpdateStatus = a.UpdateStatus,
-            UpdateMessage = a.UpdateMessage,
-            UpdateDisabled = a.UpdateDisabled,
-            UpdateConsecutiveFailures = a.UpdateConsecutiveFailures,
-            UpdateLastError = a.UpdateLastError,
-            UpdateLastResult = a.UpdateLastResult,
-            UpdateDisabledUntilUtc = a.UpdateDisabledUntilUtc,
-            UpdateLastResetUtc = a.UpdateLastResetUtc,
-            UpdateLastResetBy = a.UpdateLastResetBy,
-            UpdateVersionBefore = a.UpdateVersionBefore,
-            UpdateVersionAfter = a.UpdateVersionAfter,
-            UpdateErrorCode = a.UpdateErrorCode
+            var presence = _presenceGate.Get(a.PcId);
+            var presenceStatus = BuildPresenceStatus(presence, a.Online);
+            return new AgentInfo
+            {
+                PcId = a.PcId,
+                Name = a.Name,
+                Ip = a.Ip,
+                WsPort = a.WsPort,
+                LastSeen = a.LastSeen,
+                Online = a.Online,
+                Version = a.Version,
+                PresenceEligible = presence?.Eligible ?? a.Online,
+                PresenceStatus = presenceStatus,
+                PresenceBlockedReason = presence?.BlockedReason ?? (a.Online ? "" : "Offline"),
+                PresenceAvailable = presence?.Available ?? true,
+                PresenceAfk = presence?.Afk ?? false,
+                PresenceIdleSeconds = presence?.IdleSeconds ?? 0,
+                LastStatus = a.LastStatus,
+                LastStatusMessage = a.LastStatusMessage,
+                LastCommandId = a.LastCommandId,
+                LastCommandTs = a.LastCommandTs,
+                LastAckOk = a.LastAckOk,
+                LastAckError = a.LastAckError,
+                LastAckTs = a.LastAckTs,
+                LastResult = a.LastResult,
+                LastError = a.LastError,
+                LastErrorClass = a.LastErrorClass,
+                UpdateStatus = a.UpdateStatus,
+                UpdateMessage = a.UpdateMessage,
+                UpdateDisabled = a.UpdateDisabled,
+                UpdateConsecutiveFailures = a.UpdateConsecutiveFailures,
+                UpdateLastError = a.UpdateLastError,
+                UpdateLastResult = a.UpdateLastResult,
+                UpdateDisabledUntilUtc = a.UpdateDisabledUntilUtc,
+                UpdateLastResetUtc = a.UpdateLastResetUtc,
+                UpdateLastResetBy = a.UpdateLastResetBy,
+                UpdateVersionBefore = a.UpdateVersionBefore,
+                UpdateVersionAfter = a.UpdateVersionAfter,
+                UpdateErrorCode = a.UpdateErrorCode
+            };
         }).OrderBy(a => a.Name, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static string BuildPresenceStatus(PresenceState? presence, bool online)
+    {
+        if (presence == null)
+        {
+            return online ? "Online" : "Offline";
+        }
+
+        if (!presence.Online)
+        {
+            return "Offline";
+        }
+
+        if (!presence.Available)
+        {
+            return "Unavailable";
+        }
+
+        if (presence.Afk)
+        {
+            return "AFK";
+        }
+
+        return "Online";
     }
 
     public IReadOnlyList<ConnectionInfo> GetConnectionsSnapshot()
@@ -314,6 +352,24 @@ public sealed class LeaderService : IDisposable
             LastMessage = c.LastMessage == default ? "" : c.LastMessage.ToString("O"),
             LastError = c.LastError ?? ""
         }).OrderBy(c => c.PcId, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    public IReadOnlyList<PresenceState> GetPresenceSnapshot()
+    {
+        return _presenceGate.Snapshot();
+    }
+
+    public bool SetManualAvailability(string pcId, bool available, out string? error)
+    {
+        error = null;
+        if (string.IsNullOrWhiteSpace(pcId))
+        {
+            error = "Missing PC id.";
+            return false;
+        }
+
+        _presenceGate.SetManualAvailable(pcId, available);
+        return true;
     }
 
     public void LaunchOnAll(GameDefinition game)
@@ -456,6 +512,7 @@ public sealed class LeaderService : IDisposable
             Online = true
         };
         _agents[_localAgentPcId] = localAgent;
+        _presenceGate.UpdateOnlineOnly(localAgent.PcId, true, localAgent.LastSeen);
     }
 
     public void LaunchAppIdOnAgents(int appId, IEnumerable<string> pcIds)
@@ -1146,6 +1203,7 @@ public sealed class LeaderService : IDisposable
         agent.Version = VersionUtil.Normalize(hello.Version ?? "");
         agent.LastSeen = DateTime.UtcNow;
         agent.Online = true;
+        _presenceGate.UpdateHeartbeat(agent.PcId, true, agent.LastSeen, hello.IdleSeconds);
 
         EvaluateUpdateCompletion(agent);
 
@@ -1170,6 +1228,7 @@ public sealed class LeaderService : IDisposable
                 if (agent.Online)
                 {
                     agent.Online = false;
+                    _presenceGate.UpdateOnlineOnly(agent.PcId, false, agent.LastSeen);
                     if (agent.UpdateInProgress)
                     {
                         MarkUpdateRestarting(agent, "Agent went offline during update.");
@@ -2596,6 +2655,7 @@ public sealed class LeaderService : IDisposable
         {
             LastUpdated = DateTime.UtcNow.ToString("O"),
             Agents = GetAgentsSnapshot().ToArray(),
+            Presence = GetPresenceSnapshot().ToArray(),
             Connections = _connections.Values.Select(c => new ConnectionInfo
             {
                 PcId = c.PcId,

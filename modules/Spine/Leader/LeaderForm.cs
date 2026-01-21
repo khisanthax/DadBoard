@@ -468,7 +468,7 @@ public sealed class LeaderForm : Form
     private Control BuildAgentsGrid()
     {
         _agentsGrid.Dock = DockStyle.Fill;
-        _agentsGrid.ReadOnly = true;
+        _agentsGrid.ReadOnly = false;
         _agentsGrid.AllowUserToAddRows = false;
         _agentsGrid.AllowUserToDeleteRows = false;
         _agentsGrid.RowHeadersVisible = false;
@@ -579,13 +579,14 @@ public sealed class LeaderForm : Form
             foreach (var agent in snapshot)
             {
                 var onlineText = FormatOnline(agent.Online, agent.LastSeen);
+                var presenceText = string.IsNullOrWhiteSpace(agent.PresenceStatus) ? onlineText : agent.PresenceStatus;
                 var commandStatus = FormatCommandStatus(agent.LastStatus);
                 var ackText = FormatAck(agent.LastAckTs, agent.LastAckOk, agent.LastAckError);
                 var resultText = string.IsNullOrWhiteSpace(agent.LastResult) ? "-" : agent.LastResult;
                 var lastError = agent.LastError ?? "";
                 var truncatedError = Truncate(lastError, 60);
                 var version = string.IsNullOrWhiteSpace(agent.Version) ? "-" : VersionUtil.Normalize(agent.Version);
-                var availableDisplay = string.IsNullOrWhiteSpace(normalizedAvailable) ? "-" : normalizedAvailable;
+                var updateAvailableDisplay = string.IsNullOrWhiteSpace(normalizedAvailable) ? "-" : normalizedAvailable;
                 var decision = "Unknown";
                 if (!string.IsNullOrWhiteSpace(version) && version != "-" &&
                     !string.IsNullOrWhiteSpace(normalizedAvailable))
@@ -606,8 +607,10 @@ public sealed class LeaderForm : Form
                     agent.Ip,
                     agent.Name,
                     onlineText,
+                    presenceText,
                     version,
-                    availableDisplay,
+                    agent.PresenceAvailable,
+                    updateAvailableDisplay,
                     decision,
                     commandStatus,
                     updateStatus,
@@ -619,6 +622,7 @@ public sealed class LeaderForm : Form
 
                 var row = _agentsGrid.Rows[^1];
                 row.Cells["error"].ToolTipText = lastError;
+                row.Cells["presence"].ToolTipText = agent.PresenceBlockedReason ?? "";
                 row.Cells["update"].ToolTipText = agent.UpdateMessage ?? "";
                 row.Cells["reset"].Tag = canReset;
                 if (!canReset)
@@ -799,8 +803,17 @@ public sealed class LeaderForm : Form
         _agentsGrid.Columns[ipCol].Visible = false;
         _agentsGrid.Columns.Add("name", "PC Name");
         _agentsGrid.Columns.Add("online", "Online");
+        _agentsGrid.Columns.Add("presence", "Presence");
         _agentsGrid.Columns.Add("version", "Version");
-        _agentsGrid.Columns.Add("available", "Available");
+        var presenceAvailable = new DataGridViewCheckBoxColumn
+        {
+            Name = "presenceAvailable",
+            HeaderText = "Available",
+            AutoSizeMode = DataGridViewAutoSizeColumnMode.AllCells,
+            ReadOnly = false
+        };
+        _agentsGrid.Columns.Add(presenceAvailable);
+        _agentsGrid.Columns.Add("available", "Update Available");
         _agentsGrid.Columns.Add("decision", "Update Decision");
         _agentsGrid.Columns.Add("command", "Command Status");
         _agentsGrid.Columns.Add("update", "Update Status");
@@ -816,6 +829,17 @@ public sealed class LeaderForm : Form
             AutoSizeMode = DataGridViewAutoSizeColumnMode.AllCells
         };
         _agentsGrid.Columns.Add(resetColumn);
+
+        foreach (DataGridViewColumn column in _agentsGrid.Columns)
+        {
+            if (string.Equals(column.Name, "presenceAvailable", StringComparison.OrdinalIgnoreCase))
+            {
+                column.ReadOnly = false;
+                continue;
+            }
+
+            column.ReadOnly = true;
+        }
     }
 
     private void EnsureGamesGridColumns(IEnumerable<AgentInfo> remoteAgents)
@@ -1555,7 +1579,9 @@ public sealed class LeaderForm : Form
 
     private static string BuildTargetStatus(AgentInfo agent)
     {
-        var status = agent.Online ? "Online" : "Offline";
+        var status = string.IsNullOrWhiteSpace(agent.PresenceStatus)
+            ? (agent.Online ? "Online" : "Offline")
+            : agent.PresenceStatus;
         if (!string.IsNullOrWhiteSpace(agent.LastStatus))
         {
             status += $" | {FormatCommandStatus(agent.LastStatus)}";
@@ -1886,7 +1912,14 @@ public sealed class LeaderForm : Form
             }
 
             checkbox.Enabled = true;
-            _toolTip.SetToolTip(checkbox, "");
+            if (!agent.PresenceEligible && !string.IsNullOrWhiteSpace(agent.PresenceBlockedReason))
+            {
+                _toolTip.SetToolTip(checkbox, agent.PresenceBlockedReason);
+            }
+            else
+            {
+                _toolTip.SetToolTip(checkbox, "");
+            }
         }
     }
 
@@ -1977,9 +2010,11 @@ public sealed class LeaderForm : Form
             if (_targetStatusLabels.TryGetValue(agent.PcId, out var label))
             {
                 label.Text = BuildTargetStatus(agent);
-                label.ForeColor = agent.Online ? SystemColors.WindowText : SystemColors.GrayText;
+                label.ForeColor = agent.PresenceEligible ? SystemColors.WindowText : SystemColors.GrayText;
                 var lastError = string.Equals(agent.LastError, "none", StringComparison.OrdinalIgnoreCase) ? "" : agent.LastError;
-                _toolTip.SetToolTip(label, lastError ?? "");
+                var presenceReason = agent.PresenceEligible ? "" : agent.PresenceBlockedReason;
+                var tooltip = string.IsNullOrWhiteSpace(presenceReason) ? lastError : presenceReason;
+                _toolTip.SetToolTip(label, tooltip ?? "");
             }
 
         if (!selectedAppId.HasValue)
@@ -2032,8 +2067,16 @@ public sealed class LeaderForm : Form
 
     private void SetTargetEligibility(AgentInfo agent, CheckBox checkbox, bool enabled, string reason)
     {
+        var presenceReason = agent.PresenceEligible ? "" : agent.PresenceBlockedReason;
+        var tooltip = reason;
+        if (!string.IsNullOrWhiteSpace(presenceReason) &&
+            !reason.Contains(presenceReason, StringComparison.OrdinalIgnoreCase))
+        {
+            tooltip = $"{reason} Presence: {presenceReason}";
+        }
+
         checkbox.Enabled = enabled;
-        _toolTip.SetToolTip(checkbox, reason);
+        _toolTip.SetToolTip(checkbox, tooltip);
         _targetEligibility[agent.PcId] = enabled;
         _service.LogTargetEligibility(agent.PcId, agent.Name, enabled, reason);
     }
@@ -2250,7 +2293,30 @@ public sealed class LeaderForm : Form
             return;
         }
 
-        if (_agentsGrid.Columns[e.ColumnIndex].Name != "reset")
+        var columnName = _agentsGrid.Columns[e.ColumnIndex].Name;
+        if (columnName == "presenceAvailable")
+        {
+            var availabilityRow = _agentsGrid.Rows[e.RowIndex];
+            var presencePcId = availabilityRow.Cells["pcId"].Value?.ToString();
+            if (string.IsNullOrWhiteSpace(presencePcId))
+            {
+                return;
+            }
+
+            var current = availabilityRow.Cells["presenceAvailable"].Value as bool? ?? false;
+            var desired = !current;
+            if (!_service.SetManualAvailability(presencePcId, desired, out var availabilityError))
+            {
+                MessageBox.Show(availabilityError ?? "Unable to update availability.", "DadBoard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            availabilityRow.Cells["presenceAvailable"].Value = desired;
+            RefreshAgentsGridSafe();
+            return;
+        }
+
+        if (columnName != "reset")
         {
             return;
         }

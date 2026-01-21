@@ -11,6 +11,12 @@ public sealed class AgentInfo
     public DateTime LastSeen { get; set; }
     public bool Online { get; set; }
     public string Version { get; set; } = "";
+    public bool PresenceEligible { get; set; }
+    public string PresenceStatus { get; set; } = "";
+    public string PresenceBlockedReason { get; set; } = "";
+    public bool PresenceAvailable { get; set; }
+    public bool PresenceAfk { get; set; }
+    public int PresenceIdleSeconds { get; set; }
 
     public string LastStatus { get; set; } = "";
     public string LastStatusMessage { get; set; } = "";
@@ -56,6 +62,7 @@ public sealed class LeaderStateSnapshot
     public string LastUpdated { get; set; } = "";
     public AgentInfo[] Agents { get; set; } = Array.Empty<AgentInfo>();
     public ConnectionInfo[] Connections { get; set; } = Array.Empty<ConnectionInfo>();
+    public PresenceState[] Presence { get; set; } = Array.Empty<PresenceState>();
 }
 
 public sealed class UpdateMirrorSnapshot

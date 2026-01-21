@@ -43,6 +43,7 @@ public sealed class AgentHello
     public int WsPort { get; set; }
     public string Version { get; set; } = "1.0";
     public string Ts { get; set; } = "";
+    public int IdleSeconds { get; set; }
 }
 
 public sealed class MessageEnvelope
@@ -163,6 +164,7 @@ public sealed class LeaderConfig
     public int UpdatePort { get; set; } = 39602;
     public int OnlineTimeoutSec { get; set; } = 5;
     public int CommandTimeoutSec { get; set; } = 30;
+    public int AfkThresholdSec { get; set; } = 300;
     public GameDefinition[] Games { get; set; } = Array.Empty<GameDefinition>();
 }
 

@@ -1955,7 +1955,8 @@ public sealed class AgentService : IDisposable
             Ip = GetLocalIp(),
             WsPort = _config.WsPort,
             Version = VersionUtil.Normalize(GetAppVersion()),
-            Ts = DateTime.UtcNow.ToString("O")
+            Ts = DateTime.UtcNow.ToString("O"),
+            IdleSeconds = GetIdleSeconds()
         };
 
         var json = JsonSerializer.Serialize(hello, JsonUtil.Options);
@@ -1985,6 +1986,41 @@ public sealed class AgentService : IDisposable
 
         return "127.0.0.1";
     }
+
+    private static int GetIdleSeconds()
+    {
+        try
+        {
+            var info = new LastInputInfo();
+            info.CbSize = (uint)Marshal.SizeOf(info);
+            if (!GetLastInputInfo(ref info))
+            {
+                return 0;
+            }
+
+            var idleTicks = Environment.TickCount - info.DwTime;
+            if (idleTicks < 0)
+            {
+                idleTicks = 0;
+            }
+
+            return idleTicks / 1000;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LastInputInfo
+    {
+        public uint CbSize;
+        public int DwTime;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool GetLastInputInfo(ref LastInputInfo plii);
 
     private void PersistState()
     {
