@@ -30,6 +30,7 @@ public static class SetupOperations
 {
     private const string MutexName = "Global\\DadBoard.SingleInstance";
     private const string ShutdownEventName = "Global\\DadBoard.Shutdown";
+    private const string GateTaskName = "DadBoard Gate";
 
     public static async Task<SetupResult> RunAsync(
         SetupAction action,
@@ -64,6 +65,7 @@ public static class SetupOperations
                 logger.Info("Uninstall requested.");
                 SignalShutdown(logger);
                 WaitForAppExit(TimeSpan.FromSeconds(10), logger);
+                RemoveGateScheduledTask(logger);
 
                 if (Directory.Exists(DadBoardPaths.InstallDir))
                 {
@@ -166,6 +168,7 @@ public static class SetupOperations
         CopySetupIntoInstallDir(logger);
         CopyUpdaterIntoInstallDir(logger);
         CreateDesktopShortcut(logger);
+        EnsureGateScheduledTask(logger);
         RestartDadBoard(logger);
 
         try
@@ -483,6 +486,89 @@ public static class SetupOperations
         {
             logger.Warn($"DadBoard restart failed: {ex.Message}");
         }
+    }
+
+    private static void EnsureGateScheduledTask(SetupLogger logger)
+    {
+        try
+        {
+            var exePath = DadBoardPaths.InstalledExePath;
+            if (!File.Exists(exePath))
+            {
+                logger.Warn($"Gate task skipped: DadBoard.exe missing at {exePath}");
+                return;
+            }
+
+            var quotedExe = $"\"{exePath}\"";
+            var args = "--mode gate --minimized --no-first-run";
+            var taskArgs = $"/Create /F /SC ONLOGON /TN \"{GateTaskName}\" /TR \"{quotedExe} {args}\" /RU \"{Environment.UserName}\" /IT";
+            var (ok, stdout, stderr) = RunSchtasks(taskArgs);
+            if (ok)
+            {
+                logger.Info($"Gate task ensured: {GateTaskName}");
+            }
+            else
+            {
+                logger.Warn($"Gate task create/update failed: {stderr}");
+                if (!string.IsNullOrWhiteSpace(stdout))
+                {
+                    logger.Warn($"Gate task output: {stdout}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.Warn($"Gate task creation failed: {ex.Message}");
+        }
+    }
+
+    private static void RemoveGateScheduledTask(SetupLogger logger)
+    {
+        try
+        {
+            var taskArgs = $"/Delete /F /TN \"{GateTaskName}\"";
+            var (ok, stdout, stderr) = RunSchtasks(taskArgs);
+            if (ok)
+            {
+                logger.Info($"Gate task removed: {GateTaskName}");
+            }
+            else
+            {
+                logger.Warn($"Gate task removal failed: {stderr}");
+                if (!string.IsNullOrWhiteSpace(stdout))
+                {
+                    logger.Warn($"Gate task removal output: {stdout}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.Warn($"Gate task removal failed: {ex.Message}");
+        }
+    }
+
+    private static (bool ok, string stdout, string stderr) RunSchtasks(string args)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "schtasks.exe",
+            Arguments = args,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+
+        using var process = Process.Start(startInfo);
+        if (process == null)
+        {
+            return (false, "", "Failed to start schtasks.exe");
+        }
+
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        return (process.ExitCode == 0, stdout.Trim(), stderr.Trim());
     }
 
     private static void CopySetupIntoInstallDir(SetupLogger logger)

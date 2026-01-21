@@ -17,3 +17,13 @@ Provide a floor-control mode so a leader (and optional co-captain) can speak cle
 ## Networking (current)
 - UDP 39555 is reserved for DadBoard discovery.
 - Floor Control Gate uses UDP 39566 by default (configurable via gate settings).
+
+## Gate status + logs
+- Status JSON: `C:\ProgramData\DadBoard\Gate\status.json` (updates ~1s).
+- Gate log: `C:\ProgramData\DadBoard\logs\gate.log`.
+
+## Scheduled task (gate mode)
+- Task name: `DadBoard Gate`
+- Trigger: At logon (user session)
+- Action: `DadBoard.exe --mode gate --minimized --no-first-run`
+- Idempotent: setup updates the task on install/repair and removes on uninstall.
