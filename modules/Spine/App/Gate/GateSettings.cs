@@ -9,6 +9,9 @@ sealed class GateSettings
     public int ReleaseMs { get; set; } = 300;
     public int LeaseMs { get; set; } = 600;
     public double GateLevel { get; set; } = 0.05;
+    public double GainScalar { get; set; } = 1.0;
+    public bool AutoGainEnabled { get; set; } = false;
+    public double AutoGainTarget { get; set; } = 0.06;
     public Role DesiredRole { get; set; } = Role.Normal;
     public int RoleEpoch { get; set; } = 0;
     public string? SelectedDeviceId { get; set; }

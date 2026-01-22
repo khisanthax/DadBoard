@@ -49,6 +49,8 @@ sealed class GateEngine : IDisposable
     private bool _gated;
     private string? _lastFloorOwner;
     private GateSnapshot _lastSnapshot = new();
+    private DateTime _lastGainAdjust;
+    private DateTime _lastGainSave;
 
     private Timer? _helloTimer;
     private Timer? _talkTimer;
@@ -81,6 +83,7 @@ sealed class GateEngine : IDisposable
         _mic = new MicController();
         _mic.Initialize(_settings.SelectedDeviceId, _micLevelsStore);
         _mic.BaselineChanged += (_, _) => { };
+        _mic.SetGainScalar((float)_settings.GainScalar);
 
         _statusWriter = new StatusWriter(Path.Combine(dataRoot, "status.json"));
 
@@ -117,6 +120,7 @@ sealed class GateEngine : IDisposable
             update(_settings);
             _settingsStore.Save(_settings);
             _audio.UpdateSettings(_settings);
+            _mic.SetGainScalar((float)_settings.GainScalar);
         }
     }
 
@@ -192,12 +196,29 @@ sealed class GateEngine : IDisposable
                 ReleaseMs = _settings.ReleaseMs,
                 LeaseMs = _settings.LeaseMs,
                 GateLevel = _settings.GateLevel,
+                GainScalar = _settings.GainScalar,
+                AutoGainEnabled = _settings.AutoGainEnabled,
+                AutoGainTarget = _settings.AutoGainTarget,
                 DesiredRole = _settings.DesiredRole,
                 RoleEpoch = _settings.RoleEpoch,
                 SelectedDeviceId = _settings.SelectedDeviceId,
                 GatePort = _settings.GatePort
             };
         }
+    }
+
+    public void SendGainUpdate(string? targetPcId, double gainScalar, bool autoGainEnabled)
+    {
+        _network.Send(new GateMessage
+        {
+            Type = "GAIN_SET",
+            PcId = _pcId,
+            TargetPcId = targetPcId,
+            GainScalar = gainScalar,
+            AutoGainEnabled = autoGainEnabled,
+            Ts = DateTime.UtcNow.ToString("O")
+        });
+        Logger.Info($"Gain update broadcast target={targetPcId ?? "ALL"} gain={gainScalar:0.00} auto={autoGainEnabled}");
     }
 
     public double GetCurrentLevel()
@@ -322,6 +343,9 @@ sealed class GateEngine : IDisposable
                     break;
                 case "ROLE_CLAIM":
                     HandleRoleClaim(msg, now);
+                    break;
+                case "GAIN_SET":
+                    HandleGainSet(msg);
                     break;
             }
         }
@@ -508,11 +532,85 @@ sealed class GateEngine : IDisposable
             micScalar = _mic.CurrentVolume;
             baselineVolume = _mic.BaselineVolume;
 
+            if (_settings.AutoGainEnabled && _localTalking && !_gated)
+            {
+                ApplyAutoGain(now, _localLevel);
+            }
+
             PrunePeers(now);
 
             snapshot = BuildSnapshot(now, micScalar, baselineVolume);
             _lastSnapshot = snapshot;
         }
+    }
+
+    private void ApplyAutoGain(DateTime now, double level)
+    {
+        if (level <= 0)
+        {
+            return;
+        }
+
+        if ((now - _lastGainAdjust).TotalMilliseconds < 250)
+        {
+            return;
+        }
+
+        var target = _settings.AutoGainTarget;
+        if (target <= 0)
+        {
+            target = 0.06;
+        }
+
+        var ratio = target / Math.Max(level, 0.001);
+        ratio = Math.Clamp(ratio, 0.85, 1.15);
+        var desired = _settings.GainScalar * ratio;
+        var next = _settings.GainScalar + (desired - _settings.GainScalar) * 0.15;
+        next = Math.Clamp(next, 0.3, 2.0);
+
+        if (Math.Abs(next - _settings.GainScalar) >= 0.01)
+        {
+            _settings.GainScalar = next;
+            _mic.SetGainScalar((float)_settings.GainScalar);
+            _lastGainAdjust = now;
+        }
+
+        if ((now - _lastGainSave).TotalSeconds >= 5)
+        {
+            _settingsStore.Save(_settings);
+            _lastGainSave = now;
+        }
+    }
+
+    private void HandleGainSet(GateMessage msg)
+    {
+        if (!string.IsNullOrWhiteSpace(msg.TargetPcId) &&
+            !string.Equals(msg.TargetPcId, _pcId, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        if (msg.GainScalar == null && msg.AutoGainEnabled == null)
+        {
+            return;
+        }
+
+        lock (_lock)
+        {
+            if (msg.GainScalar.HasValue)
+            {
+                _settings.GainScalar = Math.Clamp(msg.GainScalar.Value, 0.3, 2.0);
+            }
+            if (msg.AutoGainEnabled.HasValue)
+            {
+                _settings.AutoGainEnabled = msg.AutoGainEnabled.Value;
+            }
+
+            _settingsStore.Save(_settings);
+            _mic.SetGainScalar((float)_settings.GainScalar);
+        }
+
+        Logger.Info($"Gain update applied gain={_settings.GainScalar:0.00} auto={_settings.AutoGainEnabled}");
     }
 
     private GateSnapshot BuildSnapshot(DateTime now, float micScalar, float baselineVolume)
@@ -550,6 +648,9 @@ sealed class GateEngine : IDisposable
             Gated = _gated,
             MicScalar = micScalar,
             BaselineVolume = baselineVolume,
+            GainScalar = _settings.GainScalar,
+            AutoGainEnabled = _settings.AutoGainEnabled,
+            AutoGainTarget = _settings.AutoGainTarget,
             SelectedDeviceId = _settings.SelectedDeviceId,
             SelectedDeviceName = GateAudioDevices.GetDeviceName(_settings.SelectedDeviceId),
             TalkStart = _localTalkStart == default ? _localLastTalkActivity : _localTalkStart,

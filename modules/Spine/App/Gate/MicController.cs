@@ -12,6 +12,7 @@ sealed class MicController : IDisposable
     private float _baseline;
     private bool _hasBaseline;
     private bool _isGated;
+    private float _gainScalar = 1f;
     private DateTime _lastSetAt;
     private Dictionary<string, float> _baselines = new(StringComparer.OrdinalIgnoreCase);
     private MicLevelsStore? _store;
@@ -70,6 +71,7 @@ sealed class MicController : IDisposable
     }
 
     public float BaselineVolume => _baseline;
+    public float GainScalar => _gainScalar;
 
     public string? DeviceId => _deviceId;
 
@@ -91,7 +93,7 @@ sealed class MicController : IDisposable
         }
         else
         {
-            SetVolume(_baseline);
+            SetVolume(ComputeAppliedBaseline());
         }
 
         _isGated = gated;
@@ -104,7 +106,7 @@ sealed class MicController : IDisposable
             return;
         }
 
-        SetVolume(_baseline);
+        SetVolume(ComputeAppliedBaseline());
         _isGated = false;
     }
 
@@ -144,7 +146,27 @@ sealed class MicController : IDisposable
         _baseline = Math.Clamp(value, 0f, 1f);
         _hasBaseline = true;
         SaveBaseline();
-        SetVolume(_baseline);
+        SetVolume(ComputeAppliedBaseline());
+    }
+
+    public void SetGainScalar(float scalar)
+    {
+        _gainScalar = Math.Clamp(scalar, 0.3f, 2.0f);
+        if (_endpoint == null || !_hasBaseline)
+        {
+            return;
+        }
+
+        if (!_isGated)
+        {
+            SetVolume(ComputeAppliedBaseline());
+        }
+    }
+
+    private float ComputeAppliedBaseline()
+    {
+        var applied = _baseline * _gainScalar;
+        return Math.Clamp(applied, 0.10f, 0.95f);
     }
 
     private void SaveBaseline()

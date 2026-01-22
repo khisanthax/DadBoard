@@ -15,6 +15,9 @@ sealed class GateMessage
     public string? TalkStartTs { get; set; }
     public string? Ts { get; set; }
     public string? Version { get; set; }
+    public string? TargetPcId { get; set; }
+    public double? GainScalar { get; set; }
+    public bool? AutoGainEnabled { get; set; }
 }
 
 enum Role
@@ -57,6 +60,9 @@ sealed class GateSnapshot
     public bool Gated { get; set; }
     public float MicScalar { get; set; }
     public float BaselineVolume { get; set; }
+    public double GainScalar { get; set; }
+    public bool AutoGainEnabled { get; set; }
+    public double AutoGainTarget { get; set; }
     public string? SelectedDeviceId { get; set; }
     public string? SelectedDeviceName { get; set; }
     public DateTime TalkStart { get; set; }

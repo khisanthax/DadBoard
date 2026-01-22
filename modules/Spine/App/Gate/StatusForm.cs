@@ -15,11 +15,16 @@ sealed class StatusForm : Form
     private readonly Label _floorValue = new();
     private readonly Label _thresholdValue = new();
     private readonly Label _portValue = new();
+    private readonly Label _gainValue = new();
     private readonly TrackBar _sensitivitySlider = new();
+    private readonly TrackBar _gainSlider = new();
+    private readonly CheckBox _autoGainCheck = new();
     private readonly NumericUpDown _attackInput = new();
     private readonly NumericUpDown _releaseInput = new();
     private readonly NumericUpDown _leaseInput = new();
     private readonly DataGridView _grid = new();
+    private readonly Button _applyGainSelectedButton = new();
+    private readonly Button _applyGainAllButton = new();
 
     private bool _suppressUpdates;
 
@@ -117,6 +122,44 @@ sealed class StatusForm : Form
         ConfigureNumeric(_releaseInput, 50, 2000, 300, OnTimingChanged);
         ConfigureNumeric(_leaseInput, 100, 2000, 600, OnTimingChanged);
 
+        var gainPanel = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false
+        };
+
+        _gainSlider.Minimum = 30;
+        _gainSlider.Maximum = 200;
+        _gainSlider.TickFrequency = 10;
+        _gainSlider.AutoSize = false;
+        _gainSlider.Width = 160;
+        _gainSlider.Height = 24;
+        _gainSlider.ValueChanged += OnGainChanged;
+
+        _autoGainCheck.Text = "Auto";
+        _autoGainCheck.AutoSize = true;
+        _autoGainCheck.CheckedChanged += OnAutoGainChanged;
+
+        _applyGainSelectedButton.Text = "Apply to Selected";
+        _applyGainSelectedButton.AutoSize = true;
+        _applyGainSelectedButton.Click += (_, _) => ApplyGainToSelected();
+
+        _applyGainAllButton.Text = "Apply to All";
+        _applyGainAllButton.AutoSize = true;
+        _applyGainAllButton.Click += (_, _) => ApplyGainToAll();
+
+        gainPanel.Controls.Add(new Label { Text = "Gain:", AutoSize = true });
+        gainPanel.Controls.Add(_gainSlider);
+        gainPanel.Controls.Add(_gainValue);
+        gainPanel.Controls.Add(_autoGainCheck);
+        gainPanel.Controls.Add(_applyGainSelectedButton);
+        gainPanel.Controls.Add(_applyGainAllButton);
+
+        panel.Controls.Add(gainPanel, 0, 5);
+        panel.SetColumnSpan(gainPanel, 6);
+
         return panel;
     }
 
@@ -136,6 +179,8 @@ sealed class StatusForm : Form
         _grid.AllowUserToDeleteRows = false;
         _grid.RowHeadersVisible = false;
         _grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+        _grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+        _grid.MultiSelect = false;
         _grid.Columns.Add("pc", "PC");
         _grid.Columns.Add("role", "Role");
         _grid.Columns.Add("talking", "Talking");
@@ -151,6 +196,8 @@ sealed class StatusForm : Form
         _floorValue.Text = string.IsNullOrWhiteSpace(snapshot.FloorOwner) ? "(none)" : snapshot.FloorOwner;
 
         UpdateSensitivityControls(snapshot);
+        UpdateGainControls(snapshot);
+        UpdateGainButtons(snapshot);
 
         _grid.Rows.Clear();
         foreach (var peer in snapshot.Peers)
@@ -185,6 +232,30 @@ sealed class StatusForm : Form
         }
     }
 
+    private void UpdateGainControls(GateSnapshot snapshot)
+    {
+        var settings = _engine.GetSettingsCopy();
+        _suppressUpdates = true;
+        try
+        {
+            var sliderValue = Math.Clamp((int)Math.Round(settings.GainScalar * 100), _gainSlider.Minimum, _gainSlider.Maximum);
+            _gainSlider.Value = sliderValue;
+            _gainValue.Text = settings.GainScalar.ToString("0.00");
+            _autoGainCheck.Checked = settings.AutoGainEnabled;
+        }
+        finally
+        {
+            _suppressUpdates = false;
+        }
+    }
+
+    private void UpdateGainButtons(GateSnapshot snapshot)
+    {
+        var leader = snapshot.EffectiveRole == Role.Leader;
+        _applyGainSelectedButton.Enabled = leader;
+        _applyGainAllButton.Enabled = leader;
+    }
+
     private void OnSensitivityChanged(object? sender, EventArgs e)
     {
         if (_suppressUpdates)
@@ -195,6 +266,28 @@ sealed class StatusForm : Form
         var threshold = _sensitivitySlider.Value / 1000.0;
         _thresholdValue.Text = threshold.ToString("0.000");
         _engine.UpdateSettings(s => s.Sensitivity = threshold);
+    }
+
+    private void OnGainChanged(object? sender, EventArgs e)
+    {
+        if (_suppressUpdates)
+        {
+            return;
+        }
+
+        var scalar = _gainSlider.Value / 100.0;
+        _gainValue.Text = scalar.ToString("0.00");
+        _engine.UpdateSettings(s => s.GainScalar = scalar);
+    }
+
+    private void OnAutoGainChanged(object? sender, EventArgs e)
+    {
+        if (_suppressUpdates)
+        {
+            return;
+        }
+
+        _engine.UpdateSettings(s => s.AutoGainEnabled = _autoGainCheck.Checked);
     }
 
     private void OnTimingChanged(object? sender, EventArgs e)
@@ -210,6 +303,35 @@ sealed class StatusForm : Form
             s.ReleaseMs = (int)_releaseInput.Value;
             s.LeaseMs = (int)_leaseInput.Value;
         });
+    }
+
+    private void ApplyGainToSelected()
+    {
+        var targetId = GetSelectedPeerId();
+        if (string.IsNullOrWhiteSpace(targetId))
+        {
+            MessageBox.Show(this, "Select a target in the list first.", "DadBoard Gate", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var settings = _engine.GetSettingsCopy();
+        _engine.SendGainUpdate(targetId, settings.GainScalar, settings.AutoGainEnabled);
+    }
+
+    private void ApplyGainToAll()
+    {
+        var settings = _engine.GetSettingsCopy();
+        _engine.SendGainUpdate(null, settings.GainScalar, settings.AutoGainEnabled);
+    }
+
+    private string? GetSelectedPeerId()
+    {
+        if (_grid.SelectedRows.Count == 0)
+        {
+            return null;
+        }
+
+        return _grid.SelectedRows[0].Cells[0].Value?.ToString();
     }
 
     private async System.Threading.Tasks.Task CalibrateMicAsync()
