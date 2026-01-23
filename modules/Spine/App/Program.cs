@@ -13,6 +13,7 @@ static class Program
     {
         var appLogger = new AppLogger();
         appLogger.Info($"DadBoard starting args=[{string.Join(" ", args)}]");
+        appLogger.Info($"DadBoard version {AppVersion.GetDisplayVersion()}");
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
         {
             appLogger.Error($"Unhandled exception: {e.ExceptionObject}");

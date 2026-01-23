@@ -40,6 +40,7 @@ sealed class TrayAppContext : ApplicationContext
     private readonly ToolStripMenuItem _resetUpdateFailuresItem;
     private readonly ToolStripMenuItem _statusItem;
     private readonly ToolStripMenuItem _diagnosticsItem;
+    private readonly ToolStripMenuItem _aboutItem;
     private ToolStripMenuItem? _gateLeaderItem;
     private ToolStripMenuItem? _gateCoItem;
     private ToolStripMenuItem? _gateNormalItem;
@@ -95,6 +96,8 @@ sealed class TrayAppContext : ApplicationContext
         _resetUpdateFailuresItem = new ToolStripMenuItem("Reset Update Failures (This PC)", null, (_, _) => ResetUpdateFailuresLocal());
         _statusItem = new ToolStripMenuItem("Show Status", null, (_, _) => ShowStatus());
         _diagnosticsItem = new ToolStripMenuItem("Diagnostics", null, (_, _) => ShowDiagnostics());
+        _aboutItem = new ToolStripMenuItem($"About / Version: {AppVersion.GetDisplayVersion()}") { Enabled = false };
+        _gateStatusItem = new ToolStripMenuItem("Gate Status...", null, (_, _) => ShowGateStatus());
 
         var menu = new ContextMenuStrip();
         var items = new System.Collections.Generic.List<ToolStripItem>
@@ -111,6 +114,8 @@ sealed class TrayAppContext : ApplicationContext
             _resetUpdateFailuresItem,
             _statusItem,
             _diagnosticsItem,
+            _gateStatusItem,
+            _aboutItem,
             new ToolStripSeparator(),
             new ToolStripMenuItem("Exit", null, (_, _) => Exit())
         };
@@ -200,8 +205,6 @@ sealed class TrayAppContext : ApplicationContext
         _gateDeviceMenu.DropDownOpening += (_, _) => PopulateGateDevices();
         _gateCalibrateItem = new ToolStripMenuItem("Calibrate Mic", null, async (_, _) => await RunGateCalibration());
         _gateQuickTestItem = new ToolStripMenuItem("Quick Test (Gate 5%)", null, async (_, _) => await RunGateQuickTest());
-        _gateStatusItem = new ToolStripMenuItem("Gate Status", null, (_, _) => ShowGateStatus());
-
         return new ToolStripItem[]
         {
             _gateLeaderItem,
@@ -210,7 +213,6 @@ sealed class TrayAppContext : ApplicationContext
             _gateDeviceMenu,
             _gateCalibrateItem,
             _gateQuickTestItem,
-            _gateStatusItem,
             new ToolStripSeparator()
         };
     }
@@ -282,13 +284,30 @@ sealed class TrayAppContext : ApplicationContext
 
     private void ShowGateStatus()
     {
-        if (_gateStatusForm == null)
+        try
         {
-            return;
-        }
+            if (_gate == null)
+            {
+                EnableGateMode();
+            }
 
-        _gateStatusForm.Show();
-        _gateStatusForm.BringToFront();
+            if (_gateStatusForm == null || _gateStatusForm.IsDisposed)
+            {
+                _gateStatusForm = new Gate.StatusForm(_gate ?? throw new InvalidOperationException("Gate engine not available."));
+            }
+
+            _appLogger.Info("Gate Status opened.");
+            _gateStatusForm.Show();
+            _gateStatusForm.BringToFront();
+        }
+        catch (Exception ex)
+        {
+            _appLogger.Error($"Gate Status failed to open: {ex}");
+            MessageBox.Show($"Gate Status failed to open:{Environment.NewLine}{ex}",
+                "DadBoard Gate",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+        }
     }
 
     private void DisableLeader()
@@ -319,7 +338,7 @@ sealed class TrayAppContext : ApplicationContext
 
         if (_leaderForm == null || _leaderForm.IsDisposed)
         {
-            _leaderForm = new LeaderForm(_leader);
+            _leaderForm = new LeaderForm(_leader, ShowGateStatus);
             _leaderForm.FormClosed += (_, _) => { _leaderForm = null; };
         }
 

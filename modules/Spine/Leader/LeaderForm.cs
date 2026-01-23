@@ -24,9 +24,11 @@ public sealed class LeaderForm : Form
     private const int GamesMinWindowHeight = 520;
 
     private readonly LeaderService _service;
+    private readonly Action? _openGateStatus;
     private readonly TabControl _tabs = new();
     private readonly TabPage _agentsTab = new("Agents");
     private readonly TabPage _gamesTab = new("Games");
+    private readonly TabPage _gateTab = new("Gate Status");
 
     private readonly DataGridView _agentsGrid = new();
     private readonly DataGridView _gamesGrid = new();
@@ -92,9 +94,10 @@ public sealed class LeaderForm : Form
     private bool _applyingGamesSplit;
     private bool _gamesTabInitialized;
 
-    public LeaderForm(LeaderService service)
+    public LeaderForm(LeaderService service, Action? openGateStatus = null)
     {
         _service = service;
+        _openGateStatus = openGateStatus;
         LogLayoutState("LeaderForm.ctor.start");
         Text = "DadBoard Leader (Phase 3)";
         Size = new Size(1120, 640);
@@ -119,11 +122,17 @@ public sealed class LeaderForm : Form
         _agentsTab.Controls.Add(BuildAgentsTab());
         _tabs.TabPages.Add(_agentsTab);
         _tabs.TabPages.Add(_gamesTab);
+        _gateTab.Controls.Add(BuildGateStatusTab());
+        _tabs.TabPages.Add(_gateTab);
         _tabs.SelectedIndexChanged += (_, _) =>
         {
             if (_tabs.SelectedTab == _gamesTab)
             {
                 EnsureGamesTabInitialized("games_tab_selected");
+            }
+            else if (_tabs.SelectedTab == _gateTab)
+            {
+                TryOpenGateStatus("tab_selected");
             }
         };
 
@@ -278,6 +287,55 @@ public sealed class LeaderForm : Form
         panel.Controls.Add(actions, 0, 0);
         panel.Controls.Add(BuildAgentsGrid(), 0, 1);
         return panel;
+    }
+
+    private Control BuildGateStatusTab()
+    {
+        var panel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 3
+        };
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        panel.Controls.Add(new Label
+        {
+            Text = "Gate Status opens the local gate window.",
+            AutoSize = true
+        }, 0, 0);
+
+        var openButton = new Button
+        {
+            Text = "Open Gate Status",
+            AutoSize = true
+        };
+        openButton.Click += (_, _) => TryOpenGateStatus("button_click");
+        panel.Controls.Add(openButton, 0, 1);
+
+        return panel;
+    }
+
+    private void TryOpenGateStatus(string reason)
+    {
+        try
+        {
+            if (_openGateStatus == null)
+            {
+                MessageBox.Show(this, "Gate Status is not available in this mode.", "DadBoard Gate",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            _openGateStatus();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Failed to open Gate Status:{Environment.NewLine}{ex}",
+                "DadBoard Gate", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     private Control BuildGamesTab()
