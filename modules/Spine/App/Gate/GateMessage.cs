@@ -58,6 +58,7 @@ sealed class GateSnapshot
     public bool Talking { get; set; }
     public bool Allowed { get; set; }
     public bool Gated { get; set; }
+    public string? BlockedReason { get; set; }
     public float MicScalar { get; set; }
     public float BaselineVolume { get; set; }
     public double GainScalar { get; set; }

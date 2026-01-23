@@ -13,6 +13,11 @@ sealed class StatusForm : Form
     private readonly Label _allowedValue = new();
     private readonly Label _micValue = new();
     private readonly Label _floorValue = new();
+    private readonly Label _blockedValue = new();
+    private readonly Label _leaderValue = new();
+    private readonly Label _coValue = new();
+    private readonly Label _peerCountValue = new();
+    private readonly Label _lastPeerValue = new();
     private readonly Label _thresholdValue = new();
     private readonly Label _portValue = new();
     private readonly Label _gainValue = new();
@@ -25,6 +30,8 @@ sealed class StatusForm : Form
     private readonly DataGridView _grid = new();
     private readonly Button _applyGainSelectedButton = new();
     private readonly Button _applyGainAllButton = new();
+    private readonly Button _openStatusFileButton = new();
+    private readonly Label _statusPathValue = new();
 
     private bool _suppressUpdates;
 
@@ -89,6 +96,8 @@ sealed class StatusForm : Form
         panel.Controls.Add(_micValue, 1, 1);
         panel.Controls.Add(new Label { Text = "Floor Owner:", AutoSize = true }, 2, 1);
         panel.Controls.Add(_floorValue, 3, 1);
+        panel.Controls.Add(new Label { Text = "Blocked:", AutoSize = true }, 4, 1);
+        panel.Controls.Add(_blockedValue, 5, 1);
 
         panel.Controls.Add(new Label { Text = "Sensitivity:", AutoSize = true }, 0, 2);
         panel.Controls.Add(_sensitivitySlider, 1, 2);
@@ -110,13 +119,22 @@ sealed class StatusForm : Form
 
         panel.Controls.Add(new Label { Text = "Port:", AutoSize = true }, 0, 3);
         panel.Controls.Add(_portValue, 1, 3);
-        panel.Controls.Add(new Label { Text = "Attack (ms):", AutoSize = true }, 2, 3);
-        panel.Controls.Add(_attackInput, 3, 3);
-        panel.Controls.Add(new Label { Text = "Release (ms):", AutoSize = true }, 4, 3);
-        panel.Controls.Add(_releaseInput, 5, 3);
+        panel.Controls.Add(new Label { Text = "Leader:", AutoSize = true }, 2, 3);
+        panel.Controls.Add(_leaderValue, 3, 3);
+        panel.Controls.Add(new Label { Text = "Co-Captain:", AutoSize = true }, 4, 3);
+        panel.Controls.Add(_coValue, 5, 3);
 
-        panel.Controls.Add(new Label { Text = "Lease (ms):", AutoSize = true }, 0, 4);
-        panel.Controls.Add(_leaseInput, 1, 4);
+        panel.Controls.Add(new Label { Text = "Attack (ms):", AutoSize = true }, 0, 4);
+        panel.Controls.Add(_attackInput, 1, 4);
+        panel.Controls.Add(new Label { Text = "Release (ms):", AutoSize = true }, 2, 4);
+        panel.Controls.Add(_releaseInput, 3, 4);
+        panel.Controls.Add(new Label { Text = "Lease (ms):", AutoSize = true }, 4, 4);
+        panel.Controls.Add(_leaseInput, 5, 4);
+
+        panel.Controls.Add(new Label { Text = "Peers:", AutoSize = true }, 0, 5);
+        panel.Controls.Add(_peerCountValue, 1, 5);
+        panel.Controls.Add(new Label { Text = "Last Peer:", AutoSize = true }, 2, 5);
+        panel.Controls.Add(_lastPeerValue, 3, 5);
 
         ConfigureNumeric(_attackInput, 10, 1000, 50, OnTimingChanged);
         ConfigureNumeric(_releaseInput, 50, 2000, 300, OnTimingChanged);
@@ -157,8 +175,25 @@ sealed class StatusForm : Form
         gainPanel.Controls.Add(_applyGainSelectedButton);
         gainPanel.Controls.Add(_applyGainAllButton);
 
-        panel.Controls.Add(gainPanel, 0, 5);
+        panel.Controls.Add(gainPanel, 0, 6);
         panel.SetColumnSpan(gainPanel, 6);
+
+        var statusPanel = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false
+        };
+        _openStatusFileButton.Text = "Open Status JSON";
+        _openStatusFileButton.AutoSize = true;
+        _openStatusFileButton.Click += (_, _) => OpenStatusFile();
+        _statusPathValue.AutoSize = true;
+        statusPanel.Controls.Add(_openStatusFileButton);
+        statusPanel.Controls.Add(_statusPathValue);
+
+        panel.Controls.Add(statusPanel, 0, 7);
+        panel.SetColumnSpan(statusPanel, 6);
 
         return panel;
     }
@@ -194,6 +229,11 @@ sealed class StatusForm : Form
         _allowedValue.Text = snapshot.Allowed ? "Allowed" : "Gated";
         _micValue.Text = snapshot.MicScalar.ToString("0.00");
         _floorValue.Text = string.IsNullOrWhiteSpace(snapshot.FloorOwner) ? "(none)" : snapshot.FloorOwner;
+        _blockedValue.Text = string.IsNullOrWhiteSpace(snapshot.BlockedReason) ? "-" : snapshot.BlockedReason;
+        _leaderValue.Text = string.IsNullOrWhiteSpace(snapshot.LeaderId) ? "-" : snapshot.LeaderId;
+        _coValue.Text = string.IsNullOrWhiteSpace(snapshot.CoCaptainId) ? "-" : snapshot.CoCaptainId;
+        _peerCountValue.Text = snapshot.PeerCount.ToString();
+        _lastPeerValue.Text = snapshot.LastPeerSeenSeconds.HasValue ? $"{snapshot.LastPeerSeenSeconds.Value:0}s" : "-";
 
         UpdateSensitivityControls(snapshot);
         UpdateGainControls(snapshot);
@@ -215,6 +255,7 @@ sealed class StatusForm : Form
     {
         var settings = _engine.GetSettingsCopy();
         _portValue.Text = settings.GatePort.ToString();
+        _statusPathValue.Text = $"({StatusWriterStatusPath()})";
         _suppressUpdates = true;
         try
         {
@@ -303,6 +344,34 @@ sealed class StatusForm : Form
             s.ReleaseMs = (int)_releaseInput.Value;
             s.LeaseMs = (int)_leaseInput.Value;
         });
+    }
+
+    private void OpenStatusFile()
+    {
+        var path = StatusWriterStatusPath();
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = path,
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Failed to open status file:{Environment.NewLine}{ex}",
+                "DadBoard Gate", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private string StatusWriterStatusPath()
+    {
+        return System.IO.Path.Combine(DadBoard.App.DataPaths.ResolveBaseDir(), "Gate", "status.json");
     }
 
     private void ApplyGainToSelected()

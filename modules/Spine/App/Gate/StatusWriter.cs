@@ -37,6 +37,7 @@ sealed class StatusWriter
                 talkStart = snapshot.TalkStart.ToString("O"),
                 allowed = snapshot.Allowed,
                 gated = snapshot.Gated,
+                blockedReason = snapshot.BlockedReason,
                 micScalar = snapshot.MicScalar,
                 baselineVolume = snapshot.BaselineVolume,
                 gainScalar = snapshot.GainScalar,

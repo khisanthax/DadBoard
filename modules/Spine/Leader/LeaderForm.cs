@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Diagnostics;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -29,6 +30,19 @@ public sealed class LeaderForm : Form
     private readonly TabPage _agentsTab = new("Agents");
     private readonly TabPage _gamesTab = new("Games");
     private readonly TabPage _gateTab = new("Gate Status");
+    private readonly Label _gateSummaryLabel = new();
+    private readonly Label _gatePortLabel = new();
+    private readonly Label _gateRoleLabel = new();
+    private readonly Label _gateAllowedLabel = new();
+    private readonly Label _gateBlockedLabel = new();
+    private readonly Label _gateFloorLabel = new();
+    private readonly Label _gateLeaderLabel = new();
+    private readonly Label _gateCoLabel = new();
+    private readonly Label _gatePeersLabel = new();
+    private readonly Label _gateLastPeerLabel = new();
+    private readonly Label _gateUpdatedLabel = new();
+    private readonly Button _gateRefreshButton = new();
+    private readonly Button _gateOpenFileButton = new();
 
     private readonly DataGridView _agentsGrid = new();
     private readonly DataGridView _gamesGrid = new();
@@ -132,7 +146,7 @@ public sealed class LeaderForm : Form
             }
             else if (_tabs.SelectedTab == _gateTab)
             {
-                TryOpenGateStatus("tab_selected");
+                RefreshGateStatus("tab_selected");
             }
         };
 
@@ -294,28 +308,49 @@ public sealed class LeaderForm : Form
         var panel = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 3
+            ColumnCount = 2,
+            RowCount = 12
         };
-        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
-        panel.Controls.Add(new Label
-        {
-            Text = "Gate Status opens the local gate window.",
-            AutoSize = true
-        }, 0, 0);
+        _gateSummaryLabel.Text = "Gate status file not loaded yet.";
+        _gateSummaryLabel.AutoSize = true;
+        panel.Controls.Add(_gateSummaryLabel, 0, 0);
+        panel.SetColumnSpan(_gateSummaryLabel, 2);
 
-        var openButton = new Button
-        {
-            Text = "Open Gate Status",
-            AutoSize = true
-        };
-        openButton.Click += (_, _) => TryOpenGateStatus("button_click");
-        panel.Controls.Add(openButton, 0, 1);
+        _gateRefreshButton.Text = "Refresh";
+        _gateRefreshButton.AutoSize = true;
+        _gateRefreshButton.Click += (_, _) => RefreshGateStatus("manual");
+        panel.Controls.Add(_gateRefreshButton, 0, 1);
+
+        _gateOpenFileButton.Text = "Open Status JSON";
+        _gateOpenFileButton.AutoSize = true;
+        _gateOpenFileButton.Click += (_, _) => OpenGateStatusFile();
+        panel.Controls.Add(_gateOpenFileButton, 1, 1);
+
+        AddGateRow(panel, 2, "Gate Port:", _gatePortLabel);
+        AddGateRow(panel, 3, "Role:", _gateRoleLabel);
+        AddGateRow(panel, 4, "Allowed:", _gateAllowedLabel);
+        AddGateRow(panel, 5, "Blocked Reason:", _gateBlockedLabel);
+        AddGateRow(panel, 6, "Floor Owner:", _gateFloorLabel);
+        AddGateRow(panel, 7, "Leader:", _gateLeaderLabel);
+        AddGateRow(panel, 8, "Co-Captain:", _gateCoLabel);
+        AddGateRow(panel, 9, "Peers:", _gatePeersLabel);
+        AddGateRow(panel, 10, "Last Peer Seen:", _gateLastPeerLabel);
+        AddGateRow(panel, 11, "Last Update:", _gateUpdatedLabel);
+
+        RefreshGateStatus("init");
 
         return panel;
+    }
+
+    private void AddGateRow(TableLayoutPanel panel, int row, string label, Label value)
+    {
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.Controls.Add(new Label { Text = label, AutoSize = true }, 0, row);
+        value.AutoSize = true;
+        panel.Controls.Add(value, 1, row);
     }
 
     private void TryOpenGateStatus(string reason)
@@ -336,6 +371,94 @@ public sealed class LeaderForm : Form
             MessageBox.Show(this, $"Failed to open Gate Status:{Environment.NewLine}{ex}",
                 "DadBoard Gate", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+    }
+
+    private void RefreshGateStatus(string reason)
+    {
+        try
+        {
+            var path = GetGateStatusPath();
+            if (!System.IO.File.Exists(path))
+            {
+                _gateSummaryLabel.Text = "Gate status file not found.";
+                ClearGateLabels();
+                return;
+            }
+
+            using var doc = JsonDocument.Parse(System.IO.File.ReadAllText(path));
+            var root = doc.RootElement;
+            _gateSummaryLabel.Text = $"Gate status loaded ({reason}).";
+            _gatePortLabel.Text = GetString(root, "gatePort");
+            _gateRoleLabel.Text = GetString(root, "role");
+            _gateAllowedLabel.Text = GetString(root, "allowed");
+            _gateBlockedLabel.Text = GetString(root, "blockedReason");
+            _gateFloorLabel.Text = GetString(root, "lastFloorOwner");
+            _gateLeaderLabel.Text = GetString(root, "leaderId");
+            _gateCoLabel.Text = GetString(root, "coCaptainId");
+            _gatePeersLabel.Text = GetString(root, "peerCount");
+            _gateLastPeerLabel.Text = GetString(root, "lastPeerSeenSeconds");
+            _gateUpdatedLabel.Text = GetString(root, "lastUpdate");
+        }
+        catch (Exception ex)
+        {
+            _gateSummaryLabel.Text = $"Gate status read failed: {ex.Message}";
+        }
+    }
+
+    private void ClearGateLabels()
+    {
+        _gatePortLabel.Text = "-";
+        _gateRoleLabel.Text = "-";
+        _gateAllowedLabel.Text = "-";
+        _gateBlockedLabel.Text = "-";
+        _gateFloorLabel.Text = "-";
+        _gateLeaderLabel.Text = "-";
+        _gateCoLabel.Text = "-";
+        _gatePeersLabel.Text = "-";
+        _gateLastPeerLabel.Text = "-";
+        _gateUpdatedLabel.Text = "-";
+    }
+
+    private static string GetString(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty(name, out var prop))
+        {
+            return "-";
+        }
+        return prop.ValueKind switch
+        {
+            JsonValueKind.String => prop.GetString() ?? "-",
+            JsonValueKind.Number => prop.ToString(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            _ => prop.ToString()
+        };
+    }
+
+    private void OpenGateStatusFile()
+    {
+        var path = GetGateStatusPath();
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = path,
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Failed to open gate status file:{Environment.NewLine}{ex}",
+                "DadBoard Gate", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private static string GetGateStatusPath()
+    {
+        var baseDir = System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "DadBoard");
+        return System.IO.Path.Combine(baseDir, "Gate", "status.json");
     }
 
     private Control BuildGamesTab()
@@ -598,6 +721,10 @@ public sealed class LeaderForm : Form
         if (_tabs.SelectedTab == _gamesTab && _gamesDirty)
         {
             RefreshGamesGridSafe();
+        }
+        if (_tabs.SelectedTab == _gateTab)
+        {
+            RefreshGateStatus("timer");
         }
     }
 

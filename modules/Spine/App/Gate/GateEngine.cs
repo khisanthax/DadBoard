@@ -519,6 +519,28 @@ sealed class GateEngine : IDisposable
                 }
             }
 
+            string? blockedReason = null;
+            if (localRole == Role.Normal && !allowed)
+            {
+                if (leaderTalking)
+                {
+                    blockedReason = "Leader talking";
+                }
+                else if (coTalking)
+                {
+                    blockedReason = "Co-Captain talking";
+                }
+                else if (!string.IsNullOrWhiteSpace(floorOwner) &&
+                         !string.Equals(floorOwner, _pcId, StringComparison.OrdinalIgnoreCase))
+                {
+                    blockedReason = $"Floor owned by {floorOwner}";
+                }
+                else
+                {
+                    blockedReason = "Gated";
+                }
+            }
+
             gated = localRole == Role.Normal && !allowed;
             if (gated != _gated)
             {
@@ -539,7 +561,7 @@ sealed class GateEngine : IDisposable
 
             PrunePeers(now);
 
-            snapshot = BuildSnapshot(now, micScalar, baselineVolume);
+            snapshot = BuildSnapshot(now, micScalar, baselineVolume, blockedReason);
             _lastSnapshot = snapshot;
         }
     }
@@ -613,7 +635,7 @@ sealed class GateEngine : IDisposable
         Logger.Info($"Gain update applied gain={_settings.GainScalar:0.00} auto={_settings.AutoGainEnabled}");
     }
 
-    private GateSnapshot BuildSnapshot(DateTime now, float micScalar, float baselineVolume)
+    private GateSnapshot BuildSnapshot(DateTime now, float micScalar, float baselineVolume, string? blockedReason)
     {
         var leaderId = _leaderClaim?.PcId;
         var coId = _coClaim?.PcId;
@@ -646,6 +668,7 @@ sealed class GateEngine : IDisposable
             Talking = IsTalking(_pcId, now),
             Allowed = _allowed,
             Gated = _gated,
+            BlockedReason = blockedReason,
             MicScalar = micScalar,
             BaselineVolume = baselineVolume,
             GainScalar = _settings.GainScalar,
