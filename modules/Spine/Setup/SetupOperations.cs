@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Forms;
 using DadBoard.Spine.Shared;
 
 namespace DadBoard.Setup;
@@ -30,7 +31,7 @@ public static class SetupOperations
 {
     private const string MutexName = "Global\\DadBoard.SingleInstance";
     private const string ShutdownEventName = "Global\\DadBoard.Shutdown";
-    private const string GateTaskName = "DadBoard Gate";
+    private const string GateTaskName = "DadBoard Gate Mode";
 
     public static async Task<SetupResult> RunAsync(
         SetupAction action,
@@ -499,26 +500,47 @@ public static class SetupOperations
                 return;
             }
 
+            var installDir = DadBoardPaths.InstallDir;
             var quotedExe = $"\"{exePath}\"";
-            var args = "--mode gate --minimized --no-first-run";
-            var taskArgs = $"/Create /F /SC ONLOGON /TN \"{GateTaskName}\" /TR \"{quotedExe} {args}\" /RU \"{Environment.UserName}\" /IT";
+            var args = "--mode gate";
+            var taskCommand = $"cmd.exe /c \"cd /d \\\"{installDir}\\\" && {quotedExe} {args}\"";
+            var taskArgs = $"/Create /F /SC ONLOGON /TN \"{GateTaskName}\" /TR \"{taskCommand}\" /RU \"{Environment.UserName}\" /IT /RL LIMITED";
             var (ok, stdout, stderr) = RunSchtasks(taskArgs);
             if (ok)
             {
                 logger.Info($"Gate task ensured: {GateTaskName}");
+                logger.Info($"Gate task action: {exePath} {args}");
             }
             else
             {
                 logger.Warn($"Gate task create/update failed: {stderr}");
+                logger.Warn($"Gate task args: {taskArgs}");
                 if (!string.IsNullOrWhiteSpace(stdout))
                 {
                     logger.Warn($"Gate task output: {stdout}");
+                }
+
+                if (Environment.UserInteractive)
+                {
+                    MessageBox.Show(
+                        $"Failed to create/update the gate auto-run task.{Environment.NewLine}{GateTaskName}{Environment.NewLine}{stderr}",
+                        "DadBoard Setup",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error);
                 }
             }
         }
         catch (Exception ex)
         {
             logger.Warn($"Gate task creation failed: {ex.Message}");
+            if (Environment.UserInteractive)
+            {
+                MessageBox.Show(
+                    $"Failed to create/update the gate auto-run task.{Environment.NewLine}{GateTaskName}{Environment.NewLine}{ex.Message}",
+                    "DadBoard Setup",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
         }
     }
 

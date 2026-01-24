@@ -108,17 +108,74 @@ After Phase 6:
   - Co-leader support (future)
   - Aggregated rollout reporting polish
 
-3) Voice workstream (DadVoice + Floor Gate) -- planned
-Phase V1 -- DadVoice skeleton (design-first)
-- Define interfaces/contracts + status events; no DSP yet.
+3) Floor Control Gate Roadmap (current)
+Phase 0 -- Locked decisions and architecture (DONE)
+- Gate runs inside DadBoard.exe (no separate GateAgent exe).
+- Two modes: Dashboard and Gate/Tray (--mode gate).
+- VOX-friendly gating: reduce Windows mic level to 5%, never hard mute.
+- Roles: Leader / Co-Captain / Normal.
+- Priority rules:
+  - Leader always allowed.
+  - Co-Captain allowed over normals.
+  - Leader + Co-Captain overlap allowed.
+  - Normals: one-at-a-time when neither Leader nor Co-Captain is talking.
+- Per-device baseline stored by IMMDevice.Id.
+- UDP ports: 39555 discovery, 39566 gate, gate port configurable.
 
-Phase V2 -- Floor Control Gate (policy + tray agent)
-- Standalone tray agent module inside DadBoard repo.
-- Mic scalar control (baseline + gate to 0.05 + restore).
-- Role selection UI + status window.
-- Logging + compact status.json.
-- Scheduled task install script for gate agent.
-- Out of scope: heavy audio routing/virtual devices, game launching, invite logic, Mumble server changes.
+Phase 1 -- Core Gate Mode implementation (DONE)
+- Gate/tray mode exists with role selection UI.
+- NAudio/CoreAudio mic control + baseline restore.
+- Role claims + deterministic floor selection.
+- Calibration + Quick Test overlays.
+- Status UI shows port + basic state.
+- Docs updated; nightly published.
+
+Phase 2 -- Operational hardening (NEXT, highest priority)
+2.1 Gate status JSON telemetry (DONE)
+- Goal: dashboard/diagnostics can see everything without opening the gate UI.
+- Add gatePort (and discoveryPort) to the status JSON.
+- Include: selected input device id/name, baseline volume, current applied volume, role/effective role, talking/allowed, floor owner, leader/co-captain ids, peerCount, lastPeerSeen, timestamps.
+- Atomic writes + schema version.
+- Acceptance: dashboard can read status JSON and show gate port/state; JSON updates reliably.
+
+2.2 Setup scheduled task for auto-run at login (NEXT)
+- Goal: gate mode runs on every PC automatically.
+- Setup creates/updates scheduled task (idempotent):
+  - DadBoard.exe --mode gate
+  - trigger: at logon (user session)
+- Ensure task updates path/args on reinstall.
+- Ensure uninstall/remove disables/removes task appropriately.
+- Gate logs at startup with version, selected device, bound port, baseline.
+- Acceptance: reboot/logoff-logon shows tray every time on remote PCs; rerun installer doesn’t duplicate tasks.
+
+2.3 Dashboard control of local gate (NEXT)
+- Goal: on your main PC, you shouldn’t have to run two DadBoard processes.
+- Dashboard can start/stop local gate subsystem.
+- Implementation choice:
+  - Preferred: dashboard hosts gate functionality when open.
+  - Acceptable interim: single-instance gate process + dashboard attaches/controls.
+- Acceptance: you can toggle local gate on/off from dashboard; no port/device fights.
+
+Phase 3 -- Fleet deployment + profile push consistency (NEXT after Phase 2)
+3.1 Standard Mumble profile push
+- Goal: consistent VOX behavior across machines so 5% gating reliably prevents transmit.
+- Define a standard mumble.conf baseline (VOX mode, max amplification, hold time, noise suppression choice).
+- Add a setup step/script to deploy it to each PC (without copying identities/certs unintentionally).
+- Acceptance: all PCs behave similarly; 5% gate never triggers VOX.
+
+3.2 Remote calibration workflow (quality-of-life)
+- Goal: handle quiet talkers without walking around.
+- Trigger per-PC Calibrate Mic from dashboard (or at least expose clearly in tray).
+- Save per-device baseline; clamp 10–95%.
+- Add a Quick Test per PC to validate VOX doesn’t trigger at 5%.
+- Acceptance: you can standardize levels for kids/adults quickly; fewer manual tweaks.
+
+Phase 4 -- Diagnostics and reliability (later but valuable)
+- Add gate status + logs into an existing diagnostics bundle (single-click gather).
+- Add basic fault reporting:
+  - if peerCount drops, show warning.
+  - if device disappears, auto-fallback to default recording device and warn.
+- Add a simple simulation/test mode for deterministic floor logic verification.
 
 4) Known blockers / risk flags
 - Versioning mismatch (EXE 1.0.0+<sha> vs manifest 0.1.0) can cause "no update" decisions.

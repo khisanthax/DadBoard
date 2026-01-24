@@ -23,7 +23,7 @@ Provide a floor-control mode so a leader (and optional co-captain) can speak cle
 - Gate log: `C:\ProgramData\DadBoard\logs\gate.log`.
 
 ## Scheduled task (gate mode)
-- Task name: `DadBoard Gate`
+- Task name: `DadBoard Gate Mode`
 - Trigger: At logon (user session)
-- Action: `DadBoard.exe --mode gate --minimized --no-first-run`
+- Action: `DadBoard.exe --mode gate` (working directory = install dir)
 - Idempotent: setup updates the task on install/repair and removes on uninstall.

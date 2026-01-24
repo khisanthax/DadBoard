@@ -96,6 +96,10 @@ sealed class GateEngine : IDisposable
 
     public void Start()
     {
+        var deviceId = _settings.SelectedDeviceId ?? "default";
+        var deviceName = GateAudioDevices.GetDeviceName(_settings.SelectedDeviceId);
+        var baseline = _mic.BaselineVolume;
+        Logger.Info($"Gate startup version={AppVersion.GetDisplayVersion()} port={_settings.GatePort} device={deviceName ?? "unknown"} id={deviceId} baseline={(baseline > 0 ? baseline.ToString("0.00") : "no baseline")}");
         Logger.Info($"GateEngine starting on UDP {_settings.GatePort}.");
         _network.Start();
         _audio.Start(_settings.SelectedDeviceId);
