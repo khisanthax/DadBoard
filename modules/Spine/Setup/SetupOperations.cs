@@ -501,9 +501,9 @@ public static class SetupOperations
             }
 
             var installDir = DadBoardPaths.InstallDir;
-            var quotedExe = $"\"{exePath}\"";
             var args = "--mode gate";
-            var taskCommand = $"cmd.exe /c \"cd /d \\\"{installDir}\\\" && {quotedExe} {args}\"";
+            var escapedExeForCmd = $"\\\"{exePath}\\\"";
+            var taskCommand = $"cmd.exe /c \"cd /d \\\"{installDir}\\\" && {escapedExeForCmd} {args}\"";
             var taskArgs = $"/Create /F /SC ONLOGON /TN \"{GateTaskName}\" /TR \"{taskCommand}\" /RU \"{Environment.UserName}\" /IT /RL LIMITED";
             var (ok, stdout, stderr) = RunSchtasks(taskArgs);
             if (ok)
