@@ -508,8 +508,10 @@ public static class SetupOperations
             var (ok, stdout, stderr) = RunSchtasks(taskArgs);
             if (ok)
             {
+                var restartPolicyApplied = EnsureGateTaskRestartPolicy(logger);
                 logger.Info($"Gate task ensured: {GateTaskName}");
                 logger.Info($"Gate task action: {exePath} {args}");
+                logger.Info($"Gate task restart policy: {(restartPolicyApplied ? "RestartCount=3 RestartInterval=PT1M" : "not_applied")}");
             }
             else
             {
@@ -542,6 +544,32 @@ public static class SetupOperations
                     MessageBoxIcon.Error);
             }
         }
+    }
+
+    private static bool EnsureGateTaskRestartPolicy(SetupLogger logger)
+    {
+        var escapedTaskName = GateTaskName.Replace("'", "''", StringComparison.Ordinal);
+        var script = string.Join("; ", new[]
+        {
+            "$ErrorActionPreference = 'Stop'",
+            $"$task = Get-ScheduledTask -TaskName '{escapedTaskName}'",
+            "$settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)",
+            $"Set-ScheduledTask -TaskName '{escapedTaskName}' -Settings $settings | Out-Null"
+        });
+
+        var (ok, stdout, stderr) = RunPowerShell(script);
+        if (ok)
+        {
+            return true;
+        }
+
+        logger.Warn($"Gate task restart policy update failed: {stderr}");
+        if (!string.IsNullOrWhiteSpace(stdout))
+        {
+            logger.Warn($"Gate task restart policy output: {stdout}");
+        }
+
+        return false;
     }
 
     private static void RemoveGateScheduledTask(SetupLogger logger)
@@ -585,6 +613,31 @@ public static class SetupOperations
         if (process == null)
         {
             return (false, "", "Failed to start schtasks.exe");
+        }
+
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        return (process.ExitCode == 0, stdout.Trim(), stderr.Trim());
+    }
+
+    private static (bool ok, string stdout, string stderr) RunPowerShell(string script)
+    {
+        var encodedScript = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script));
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            Arguments = $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {encodedScript}",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+
+        using var process = Process.Start(startInfo);
+        if (process == null)
+        {
+            return (false, "", "Failed to start powershell.exe");
         }
 
         var stdout = process.StandardOutput.ReadToEnd();

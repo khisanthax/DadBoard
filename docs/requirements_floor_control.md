@@ -26,4 +26,7 @@ Provide a floor-control mode so a leader (and optional co-captain) can speak cle
 - Task name: `DadBoard Gate Mode`
 - Trigger: At logon (user session)
 - Action: `DadBoard.exe --mode gate` (working directory = install dir)
+- Restart behavior: restart on failure up to 3 times, 1 minute apart.
 - Idempotent: setup updates the task on install/repair and removes on uninstall.
+- Default install behavior: setup enables this task on every machine by default, including the Dad PC.
+- Until FCG 2.3 is implemented: Dad PC can run dashboard from the same DadBoard process started in gate mode (enable Leader/Open Dashboard from tray), or you can disable the task manually if you only want on-demand startup.
